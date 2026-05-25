@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Plugin name="SellVault">
+  <Version>1.0.0</Version>
+  <Author>imaximum.tech</Author>
+  <Description>
+    Unified market (shared MySQL with the Discord bot). Admins register storage barricades as
+    sell boxes with /setsellbox; when a player closes a box, items in the market list are sold for
+    Coins (price x (100% - commission), stock +amount) and other items are returned. Also handles
+    Discord account linking + welcome pack + /coins.
+  </Description>
+  <Target><Unturned>3.26.3.2</Unturned><RocketMod>4.9.3.18</RocketMod></Target>
+  <Commands>
+    <Command name="setsellbox" permission="sellvault.setsellbox">Register the open storage as a sell box (admin)</Command>
+    <Command name="link" permission="sellvault.link">Link Discord with a code + get welcome pack</Command>
+    <Command name="coins" permission="sellvault.coins">Check your coin balance</Command>
+    <Command name="sellreload" permission="sellvault.reload">Reload market + sell boxes from DB</Command>
+  </Commands>
+</Plugin>

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.env
+
+# .NET
+obj/
+.vs/
+*.user
+*.suo
+
+# Rocket runtime files (generated on the server)
+*.configuration.xml
+*.translation.xml

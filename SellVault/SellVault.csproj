@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>SellVault</AssemblyName>
+    <RootNamespace>SellVault</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.0.0</Version>
+    <Company>imaximum.tech</Company>
+    <Product>SellVault</Product>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <UnturnedManaged>D:\SteamLibrary\steamapps\common\Unturned\Unturned_Data\Managed</UnturnedManaged>
+    <RocketDir>D:\SteamLibrary\steamapps\common\Unturned\Extras\Rocket.Unturned</RocketDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp"><HintPath>$(UnturnedManaged)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(UnturnedManaged)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnturnedManaged)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="com.rlabrecque.steamworks.net"><HintPath>$(UnturnedManaged)\com.rlabrecque.steamworks.net.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Rocket.API"><HintPath>$(RocketDir)\Rocket.API.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Rocket.Core"><HintPath>$(RocketDir)\Rocket.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Rocket.Unturned"><HintPath>$(RocketDir)\Rocket.Unturned.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="MySql.Data"><HintPath>libs\MySql.Data.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="System.Data" />
+  </ItemGroup>
+
+</Project>
