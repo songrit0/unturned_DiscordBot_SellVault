@@ -15,9 +15,60 @@ import re
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord.webhook.async_ import Webhook
 
 import config
 import db
+
+
+# ---- auto-dismiss ephemeral messages after N seconds (no manual "Dismiss") ----
+AUTO_DISMISS_SECONDS = 300  # 5 minutes
+
+
+async def _auto_dismiss(message_coro_or_obj, delay: int):
+    try:
+        msg = await message_coro_or_obj if asyncio.iscoroutine(message_coro_or_obj) else message_coro_or_obj
+        if msg is None:
+            return
+        await asyncio.sleep(delay)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+_orig_response_send = discord.InteractionResponse.send_message
+
+async def _patched_response_send(self, *args, **kwargs):
+    is_eph = bool(kwargs.get("ephemeral", False))
+    result = await _orig_response_send(self, *args, **kwargs)
+    if is_eph and AUTO_DISMISS_SECONDS > 0:
+        async def grab():
+            try:
+                msg = await self._parent.original_response()
+                asyncio.create_task(_auto_dismiss(msg, AUTO_DISMISS_SECONDS))
+            except Exception:
+                pass
+        asyncio.create_task(grab())
+    return result
+
+discord.InteractionResponse.send_message = _patched_response_send
+
+
+_orig_webhook_send = Webhook.send
+
+async def _patched_webhook_send(self, *args, **kwargs):
+    is_eph = bool(kwargs.get("ephemeral", False))
+    if is_eph:
+        kwargs.setdefault("wait", True)
+    msg = await _orig_webhook_send(self, *args, **kwargs)
+    if is_eph and msg is not None and AUTO_DISMISS_SECONDS > 0:
+        asyncio.create_task(_auto_dismiss(msg, AUTO_DISMISS_SECONDS))
+    return msg
+
+Webhook.send = _patched_webhook_send
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("unturned-bot")
