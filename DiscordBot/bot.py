@@ -143,6 +143,9 @@ async def build_top_embed() -> discord.Embed:
 def build_commands_embed() -> discord.Embed:
     e = discord.Embed(title="📖 คำสั่งในเกม / In-game commands", description="พิมพ์ในแชทเกม Unturned",
                       color=0x95A5A6)
+    e.add_field(name="🌐 เว็บไซต์ / Web shop",
+                value=f"ซื้อ-ขาย / ดูยอด / เช็คโค้ด ผ่านเว็บได้เลย: {config.WEB_SHOP_URL}/login",
+                inline=False)
     e.add_field(name="/link <code>", value="เชื่อมบัญชี Discord (code จากปุ่ม Welcome Pack) + รับของ", inline=False)
     e.add_field(name="/sell", value="เปิดกล่องขาย (เฉพาะใน Safe Zone) → วางของ → ปิด → ได้ Coin", inline=False)
     e.add_field(name="ขายของ (อีกวิธี)", value="เอาของไปวางใน 'กล่อง sell' ที่แอดมินตั้งไว้ แล้วปิดกล่อง → ได้ Coin", inline=False)
@@ -165,6 +168,8 @@ def build_commands_embed() -> discord.Embed:
 class LinkView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="🌐 เปิดเว็บ Shop", style=discord.ButtonStyle.link,
+                                        url=config.WEB_SHOP_URL))
 
     @discord.ui.button(label="🎁 รับ Welcome Pack / เชื่อมบัญชี", style=discord.ButtonStyle.success,
                        custom_id="welcomepack_link")
@@ -180,7 +185,8 @@ class LinkView(discord.ui.View):
             await interaction.response.send_message("เกิดข้อผิดพลาด ลองใหม่", ephemeral=True)
             return
         await interaction.response.send_message(
-            f"เข้าเกมแล้วพิมพ์:\n```/link {code}```\nเชื่อมบัญชี + รับ Welcome Pack 🎁 *(code ใช้ครั้งเดียว)*",
+            f"เข้าเกมแล้วพิมพ์:\n```/link {code}```\nเชื่อมบัญชี + รับ Welcome Pack 🎁 *(code ใช้ครั้งเดียว)*\n\n"
+            f"หรือซื้อ-ขายผ่านเว็บที่ {config.WEB_SHOP_URL}/login (login ด้วย Discord เดียวกัน)",
             ephemeral=True)
 
 
@@ -214,6 +220,8 @@ class ShopPanelView(discord.ui.View):
     """Persistent shop panel: buy single items or packages."""
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="🌐 เปิดเว็บ", style=discord.ButtonStyle.link,
+                                        url=config.WEB_SHOP_URL))
 
     @discord.ui.button(label="🛒 เปิดร้าน / Open shop", style=discord.ButtonStyle.primary, custom_id="open_shop")
     async def open_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -228,6 +236,8 @@ class BillsShopPanelView(discord.ui.View):
     """Persistent bills shop panel: buy cash bills only."""
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="🌐 เปิดเว็บ", style=discord.ButtonStyle.link,
+                                        url=config.WEB_SHOP_URL))
 
     @discord.ui.button(label="💵 ซื้อ Bills / Buy bills", style=discord.ButtonStyle.primary, custom_id="open_bills_shop")
     async def open_bills(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -624,7 +634,11 @@ async def setuplink(interaction: discord.Interaction):
         return
     await interaction.channel.send(embed=discord.Embed(
         title="🎁 Welcome Pack",
-        description="กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>`", color=0x2ECC71), view=LinkView())
+        description=(
+            "กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>`\n\n"
+            f"🌐 เว็บ: {config.WEB_SHOP_URL}/login"
+        ),
+        color=0x2ECC71), view=LinkView())
     await interaction.response.send_message("วางปุ่มแล้ว ✅", ephemeral=True)
 
 
@@ -686,7 +700,12 @@ async def setup(interaction: discord.Interaction):
 
         await welcome.send(embed=discord.Embed(
             title="🎁 Welcome Pack",
-            description="กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>` เชื่อมบัญชี + รับของ", color=0x2ECC71),
+            description=(
+                "กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>` เชื่อมบัญชี + รับของ\n\n"
+                f"**🆕 เข้าใช้ผ่านเว็บได้แล้ว!** ซื้อ-ขาย/ดูยอด/เช็คโค้ดผ่านมือถือก็ได้\n"
+                f"👉 {config.WEB_SHOP_URL}/login (login ด้วย Discord เดียวกัน)"
+            ),
+            color=0x2ECC71),
             view=LinkView())
         await coins_ch.send(embed=discord.Embed(
             title="💰 เช็ค Coin / My Coins", description="กดปุ่มเพื่อดูยอด Coin", color=0xF1C40F), view=BalanceView())
