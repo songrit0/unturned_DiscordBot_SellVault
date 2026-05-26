@@ -1,19 +1,23 @@
+using Rocket.Unturned.Events;
+using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
+using Logger = Rocket.Core.Logging.Logger;
 
 namespace SellVault
 {
     /// <summary>
-    /// Per-player component that tracks the storage the player currently has open and fires when
-    /// they close it. Opening a storage resizes the STORAGE page to its size; closing resizes it to
-    /// 0x0 (same signal RFVault uses). We capture the InteractableStorage on open so we still have
-    /// it at close time, then hand it to the plugin to check if it's a registered sell box.
+    /// Per-player component. On close (STORAGE page goes WxH -> 0x0), look up the sellbox barricade
+    /// the player is standing next to and hand it to the plugin. We can't rely on
+    /// Player.inventory.storage because it's unreliable in this server-side context.
     /// </summary>
     public sealed class SellVaultComponent : MonoBehaviour
     {
         public Player Player;
-        private InteractableStorage _openStorage;
         private bool _subscribed;
+        private float _nextOnlineRewardAt;
+        private float _lastMoveAt;
+        private Vector3 _lastPos;
 
         public void Init(Player player)
         {
@@ -23,25 +27,57 @@ namespace SellVault
                 Player.inventory.onInventoryResized += OnInventoryResized;
                 _subscribed = true;
             }
+
+            float now = Time.realtimeSinceStartup;
+            int interval = SellVaultPlugin.Instance?.Configuration?.Instance?.OnlineIntervalSeconds ?? 300;
+            _nextOnlineRewardAt = now + interval;
+            _lastMoveAt = now;
+            _lastPos = player != null ? player.transform.position : Vector3.zero;
+        }
+
+        private void Update()
+        {
+            if (Player == null) return;
+            SellVaultPlugin plugin = SellVaultPlugin.Instance;
+            if (plugin == null) return;
+            SellVaultConfiguration cfg = plugin.Configuration?.Instance;
+            if (cfg == null || cfg.OnlineRewardCoins <= 0 || cfg.OnlineIntervalSeconds <= 0) return;
+
+            float now = Time.realtimeSinceStartup;
+
+            // movement detection (for AFK)
+            Vector3 pos = Player.transform.position;
+            if ((pos - _lastPos).sqrMagnitude > 0.04f) { _lastMoveAt = now; _lastPos = pos; }
+
+            if (now < _nextOnlineRewardAt) return;
+            _nextOnlineRewardAt = now + cfg.OnlineIntervalSeconds;
+
+            bool alive = Player.life != null && !Player.life.isDead;
+            bool notAfk = cfg.AfkSeconds <= 0 || (now - _lastMoveAt) < cfg.AfkSeconds;
+            if (!alive || !notAfk) return;
+
+            ulong steamId = Player.channel?.owner?.playerID.steamID.m_SteamID ?? 0;
+            if (steamId == 0) return;
+            plugin.GrantOnlineReward(steamId, cfg.OnlineRewardCoins);
         }
 
         private void OnInventoryResized(byte page, byte width, byte height)
         {
-            if (page != PlayerInventory.STORAGE)
-                return;
+            Logger.Log("[SellVault] resize page=" + page + " " + width + "x" + height);
+            if (page != PlayerInventory.STORAGE) return;
+            // Server only emits 0x0 here (close). Use that as trigger.
+            if (width != 0 || height != 0) return;
 
-            if (width > 0 && height > 0)
-            {
-                // a storage just opened — remember which one
-                _openStorage = Player != null && Player.inventory != null ? Player.inventory.storage : null;
-            }
-            else // 0x0 -> closed
-            {
-                InteractableStorage s = _openStorage;
-                _openStorage = null;
-                if (s != null)
-                    SellVaultPlugin.Instance?.OnStorageClosed(Player, s);
-            }
+            SellVaultPlugin plugin = SellVaultPlugin.Instance;
+            if (plugin == null || Player == null) return;
+
+            ulong sid = Player.channel?.owner?.playerID.steamID.m_SteamID ?? 0;
+            InteractableStorage s = plugin.TryGetVirtualVaultStorage(sid);
+            string src = "virtual";
+            if (s == null) { s = plugin.FindNearbySellBox(Player.transform.position, 5f); src = "nearby"; }
+            Logger.Log("[SellVault] CLOSED src=" + src + " -> " +
+                (s != null ? "FOUND @ " + s.transform.position : "none"));
+            if (s != null) plugin.OnStorageClosed(Player, s);
         }
 
         private void OnDestroy()
@@ -49,7 +85,6 @@ namespace SellVault
             if (Player?.inventory != null && _subscribed)
                 Player.inventory.onInventoryResized -= OnInventoryResized;
             _subscribed = false;
-            _openStorage = null;
         }
     }
 }

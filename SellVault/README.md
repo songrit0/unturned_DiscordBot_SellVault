@@ -18,14 +18,14 @@
 ## Commands
 | Command | Permission | หน้าที่ |
 |---------|------------|---------|
-| `/setsellbox` | `sellvault.setsellbox` | เปิดกล่อง storage ค้างไว้ แล้วพิมพ์ → ตั้งเป็นกล่องขาย (admin) |
+| `/setsellbox` | `sellvault.setsellbox` | เล็งไปที่กล่อง storage (ระยะ 6m) แล้วพิมพ์ → ตั้งเป็นกล่องขาย (admin) |
 | `/link <code>` | `sellvault.link` | เชื่อม Discord (code จากปุ่ม Welcome Pack) + รับ welcome pack |
 | `/coins` | `sellvault.coins` | เช็คยอด Coin |
 | `/sellreload` | `sellvault.reload` | โหลด market + กล่อง sell ใหม่จาก DB (หลังแก้ราคาในบอท) |
 
 ## ตั้งกล่อง sell (admin)
 1. วาง storage (เช่น Locker/Crate) บนแมพ
-2. **เปิดกล่องนั้นค้างไว้** แล้วพิมพ์ `/setsellbox` → กล่องนี้กลายเป็นกล่องขาย (จำตำแหน่งใน `sv_sellboxes`)
+2. **เล็งไปที่กล่อง** (ระยะไม่เกิน 6m, ไม่ต้องเปิด) แล้วพิมพ์ `/setsellbox` → กล่องนี้กลายเป็นกล่องขาย (จำตำแหน่งใน `sv_sellboxes`)
 3. ผู้เล่นเอาของมาวาง → ปิด → ขาย
 
 ## Config (`SellVault.configuration.xml`)
@@ -50,7 +50,7 @@
 
 ## ⚠️ ต้องเทสในเกม
 ส่วน "กล่อง sell" (ตรวจกล่อง storage + อ่านของตอนปิด) compile ผ่าน (API มีจริง) และอิงแพทเทิร์น onInventoryResized ที่ใช้งานจริง **แต่ผมรันในเกมไม่ได้** — เทสบนเซิร์ฟ:
-- `/setsellbox` ตอนเปิดกล่อง → ขึ้นว่าตั้งกล่องแล้ว
+- `/setsellbox` ตอนเล็งกล่อง → ขึ้นว่าตั้งกล่องแล้ว
 - เอาของใน market วาง → ปิด → ได้ Coin + ของหายจากกล่อง
 - เอาของนอก list วาง → ปิด → เด้งคืนกระเป๋า
 - เช็ค stock ใน market เพิ่มขึ้น

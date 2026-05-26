@@ -26,4 +26,26 @@ namespace SellVault
             plugin.SetSellBox(up);
         }
     }
+
+    /// <summary>
+    /// <c>/sell</c> - opens a virtual sell vault for the player. Only usable inside a game safe zone.
+    /// Items the player drops in are sold when they close the vault; non-market items are returned.
+    /// </summary>
+    public sealed class CommandSell : IRocketCommand
+    {
+        public AllowedCaller AllowedCaller => AllowedCaller.Player;
+        public string Name => "sell";
+        public string Help => "Open the sell vault (safe zone only).";
+        public string Syntax => "";
+        public List<string> Aliases => new List<string>();
+        public List<string> Permissions => new List<string> { "sellvault.sell" };
+
+        public void Execute(IRocketPlayer caller, string[] command)
+        {
+            SellVaultPlugin plugin = SellVaultPlugin.Instance;
+            UnturnedPlayer up = caller as UnturnedPlayer;
+            if (plugin?.Database == null || up?.Player == null) return;
+            plugin.OpenSellVault(up);
+        }
+    }
 }

@@ -27,6 +27,7 @@ namespace SellVault
         private readonly string _boxes;
         private readonly string _links;
         private readonly string _linkCodes;
+        private readonly string _activity;
 
         public SellDatabase(string connectionString, string tablePrefix)
         {
@@ -38,6 +39,7 @@ namespace SellVault
             _boxes = p + "sellboxes";
             _links = p + "links";
             _linkCodes = p + "link_codes";
+            _activity = p + "activity_log";
             EnsureSchema();
         }
 
@@ -80,6 +82,12 @@ namespace SellVault
                     Exec(c, "CREATE TABLE IF NOT EXISTS `" + _linkCodes + "` ("
                         + "`code` VARCHAR(32) PRIMARY KEY,`discord_id` BIGINT UNSIGNED NOT NULL,"
                         + "`created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                        + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+                    Exec(c, "CREATE TABLE IF NOT EXISTS `" + _activity + "` ("
+                        + "`id` INT AUTO_INCREMENT PRIMARY KEY,`steam_id` BIGINT UNSIGNED NOT NULL,"
+                        + "`kind` VARCHAR(24) NOT NULL,`coins` BIGINT NOT NULL,"
+                        + "`at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                        + "INDEX `idx_steam` (`steam_id`),INDEX `idx_kind` (`kind`)"
                         + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
                 }
                 Logger.Log("[SellVault] MySQL tables ready.");
@@ -170,6 +178,26 @@ namespace SellVault
                 }
             }
             catch (Exception ex) { Logger.LogException(ex, "[SellVault] GetCoins failed"); return -1; }
+        }
+
+        public void LogActivity(ulong steamId, string kind, long coins)
+        {
+            try
+            {
+                using (MySqlConnection c = new MySqlConnection(_conn))
+                {
+                    c.Open();
+                    using (MySqlCommand cmd = new MySqlCommand(
+                        "INSERT INTO `" + _activity + "` (steam_id,kind,coins) VALUES (@s,@k,@c);", c))
+                    {
+                        cmd.Parameters.AddWithValue("@s", steamId);
+                        cmd.Parameters.AddWithValue("@k", kind ?? "?");
+                        cmd.Parameters.AddWithValue("@c", coins);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.LogException(ex, "[SellVault] LogActivity failed"); }
         }
 
         public void LogSale(ulong steamId, ushort itemId, int amount, long coins)

@@ -31,3 +31,7 @@ COIN_NAME = os.getenv("COIN_NAME", "Coin")
 # Base commission % (match SellVault's BaseCommissionPercent) — used only to DISPLAY estimated
 # sell payouts in the catalog.
 SELL_COMMISSION = float(os.getenv("SELL_COMMISSION", "40"))
+
+# Item ids treated as cash bills — separated from /shop into a dedicated bills-shop channel.
+# Must match the plugin's NoCommissionItemIds so sells pay full face value.
+BILL_ITEM_IDS = tuple(int(x) for x in os.getenv("BILL_ITEM_IDS", "4254,4255,4256,4257,4258").split(",") if x.strip())

@@ -126,11 +126,25 @@ def top_coins(limit: int = 10):
 
 # ---------- market (single list: buy single + sell in box) ----------
 
-def list_market(include_hidden: bool = False):
-    where = "WHERE enabled=1" if include_hidden else "WHERE enabled=1 AND amount > 0"
+def list_market(include_hidden: bool = False, exclude_ids=None, only_ids=None):
+    """List market items. exclude_ids/only_ids are iterables of item_ids to filter on."""
+    clauses = ["enabled=1"] if include_hidden else ["enabled=1", "amount > 0"]
+    params = []
+    if only_ids:
+        ids = tuple(int(i) for i in only_ids)
+        if not ids:
+            return []
+        clauses.append(f"item_id IN ({','.join(['%s'] * len(ids))})")
+        params.extend(ids)
+    elif exclude_ids:
+        ids = tuple(int(i) for i in exclude_ids)
+        if ids:
+            clauses.append(f"item_id NOT IN ({','.join(['%s'] * len(ids))})")
+            params.extend(ids)
+    where = "WHERE " + " AND ".join(clauses)
     with _conn() as c, c.cursor() as cur:
         cur.execute(f"SELECT item_id, name, price, amount, image_url FROM `{SV}market` {where} "
-                    f"ORDER BY name ASC;")
+                    f"ORDER BY price ASC, name ASC;", params)
         return cur.fetchall()
 
 

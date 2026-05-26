@@ -93,9 +93,16 @@ def build_commands_embed() -> discord.Embed:
     e = discord.Embed(title="📖 คำสั่งในเกม / In-game commands", description="พิมพ์ในแชทเกม Unturned",
                       color=0x95A5A6)
     e.add_field(name="/link <code>", value="เชื่อมบัญชี Discord (code จากปุ่ม Welcome Pack) + รับของ", inline=False)
-    e.add_field(name="ขายของ", value="เอาของไปวางใน 'กล่อง sell' ที่แอดมินตั้งไว้ แล้วปิดกล่อง → ได้ Coin", inline=False)
+    e.add_field(name="/sell", value="เปิดกล่องขาย (เฉพาะใน Safe Zone) → วางของ → ปิด → ได้ Coin", inline=False)
+    e.add_field(name="ขายของ (อีกวิธี)", value="เอาของไปวางใน 'กล่อง sell' ที่แอดมินตั้งไว้ แล้วปิดกล่อง → ได้ Coin", inline=False)
     e.add_field(name="/coins", value="เช็คยอด Coin", inline=False)
-    e.add_field(name="/code <code>", value="ใช้โค้ด (จาก /shop) รับของเข้าเกม", inline=False)
+    e.add_field(name="/code <code>", value="ใช้โค้ด (จาก /shop หรือ /bills-shop) รับของเข้าเกม", inline=False)
+    e.add_field(name="💵 Bills",
+                value="ธนบัตร $5/$10/$50/$100/$500 — ซื้อที่ห้อง 💵-bills-shop ใน Discord, ขายที่ /sell ได้เต็มราคา (ไม่หัก commission)",
+                inline=False)
+    e.add_field(name="🎁 Online + Activity Rewards",
+                value="ออนไลน์รับ Coin อัตโนมัติ (ไม่ AFK) + ได้ Coin จากการฆ่าซอมบี้/ผู้เล่น/สัตว์, สร้าง, เก็บทรัพยากร",
+                inline=False)
     e.add_field(name="/decay", value="เช็คการป้องกันฐาน (ToolCupboard)", inline=False)
     e.add_field(name="/itemid", value="ดู id ไอเทมที่ถืออยู่", inline=False)
     e.set_footer(text="แอดมิน: /setsellbox /sellreload /tcreload /dmreload")
@@ -166,6 +173,20 @@ class ShopPanelView(discord.ui.View):
         await show_basket(interaction)
 
 
+class BillsShopPanelView(discord.ui.View):
+    """Persistent bills shop panel: buy cash bills only."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="💵 ซื้อ Bills / Buy bills", style=discord.ButtonStyle.primary, custom_id="open_bills_shop")
+    async def open_bills(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await send_bills_shop(interaction)
+
+    @discord.ui.button(label="🧺 ตะกร้า / Basket", style=discord.ButtonStyle.secondary, custom_id="open_bills_basket")
+    async def open_basket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await show_basket(interaction)
+
+
 class LeaderboardView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -178,12 +199,20 @@ class LeaderboardView(discord.ui.View):
 # ----- show all items, each with an Add-to-basket button -----
 
 async def send_shop(interaction: discord.Interaction):
-    items = await asyncio.to_thread(db.list_market)
+    items = await asyncio.to_thread(db.list_market, False, config.BILL_ITEM_IDS, None)
+    await _send_item_cards(interaction, items, empty_msg="ยังไม่มีรายการ | No items.")
+
+
+async def send_bills_shop(interaction: discord.Interaction):
+    items = await asyncio.to_thread(db.list_market, False, None, config.BILL_ITEM_IDS)
+    await _send_item_cards(interaction, items, empty_msg="ยังไม่มี Bills ในระบบ | No bills available.")
+
+
+async def _send_item_cards(interaction: discord.Interaction, items, empty_msg: str):
     if not items:
-        await interaction.response.send_message("ยังไม่มีรายการ | No items.", ephemeral=True)
+        await interaction.response.send_message(empty_msg, ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
-    # send each item as its own card with an Add button right under it
     for it in items[:25]:
         await interaction.followup.send(embed=market_item_embed(it),
                                         view=AddOneView(int(it["item_id"]), it["name"]), ephemeral=True)
@@ -583,6 +612,7 @@ async def setup(interaction: discord.Interaction):
         welcome = await ensure_channel("🎁-welcome")
         coins_ch = await ensure_channel("💰-my-coins")
         shop_ch = await ensure_channel("🛒-shop")
+        bills_ch = await ensure_channel("💵-bills-shop")
         market_ch = await ensure_channel("🏷️-market")
         lb = await ensure_channel("🏆-leaderboard")
         cmds_ch = await ensure_channel("📖-commands")
@@ -597,7 +627,7 @@ async def setup(interaction: discord.Interaction):
                 admin_over[role] = discord.PermissionOverwrite(view_channel=True)
         admin_ch = await ensure_channel("🛠️-admin", admin_over)
 
-        for ch in (welcome, coins_ch, shop_ch, market_ch, lb, cmds_ch, admin_ch):
+        for ch in (welcome, coins_ch, shop_ch, bills_ch, market_ch, lb, cmds_ch, admin_ch):
             try:
                 await ch.purge(limit=20, check=lambda m: m.author == guild.me)
             except Exception:
@@ -612,6 +642,11 @@ async def setup(interaction: discord.Interaction):
         await shop_ch.send(embed=discord.Embed(
             title="🛒 ร้านค้า / Shop", description="ซื้อชิ้นเดี่ยว หรือแพ็กเกจ ด้วย Coin → ได้โค้ด → /code ในเกม",
             color=0x3498DB), view=ShopPanelView())
+        await bills_ch.send(embed=discord.Embed(
+            title="💵 ซื้อ Bills / Bills Shop",
+            description=("ซื้อธนบัตรในเกมด้วย Coin → ได้โค้ด → /code ในเกม\n"
+                         "ขายธนบัตรในเกมที่ /sell ได้เต็มราคา ไม่หัก commission"),
+            color=0x27AE60), view=BillsShopPanelView())
         await market_ch.send(embed=discord.Embed(
             title="🏷️ รายการตลาด / Market",
             description="กดดูรายการของที่ซื้อ/ขายได้ + ราคา (ขายจริงในเกมที่กล่อง sell)", color=0xE67E22),
@@ -632,7 +667,7 @@ async def setup(interaction: discord.Interaction):
 
     await interaction.followup.send(
         "ตั้งค่าเสร็จ ✅ " + " · ".join(
-            c.mention for c in (welcome, coins_ch, shop_ch, market_ch, lb, cmds_ch, admin_ch)), ephemeral=True)
+            c.mention for c in (welcome, coins_ch, shop_ch, bills_ch, market_ch, lb, cmds_ch, admin_ch)), ephemeral=True)
 
 
 # ---------------- lifecycle ----------------
@@ -641,7 +676,7 @@ async def setup(interaction: discord.Interaction):
 async def setup_hook():
     await asyncio.to_thread(db.ensure_schema)
     for v in (LinkView(), BalanceView(), MarketListView(), ShopPanelView(),
-              LeaderboardView(), AdminPanelView()):
+              BillsShopPanelView(), LeaderboardView(), AdminPanelView()):
         bot.add_view(v)
     if config.GUILD_ID:
         guild = discord.Object(id=config.GUILD_ID)
