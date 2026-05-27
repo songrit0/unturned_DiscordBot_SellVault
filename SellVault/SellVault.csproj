@@ -22,6 +22,7 @@
     <Reference Include="Assembly-CSharp"><HintPath>$(UnturnedManaged)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine"><HintPath>$(UnturnedManaged)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnturnedManaged)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(UnturnedManaged)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="com.rlabrecque.steamworks.net"><HintPath>$(UnturnedManaged)\com.rlabrecque.steamworks.net.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Rocket.API"><HintPath>$(RocketDir)\Rocket.API.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Rocket.Core"><HintPath>$(RocketDir)\Rocket.Core.dll</HintPath><Private>false</Private></Reference>

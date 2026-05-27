@@ -9,7 +9,10 @@ Single market list (sv_market): item_id, name, price, amount (live stock), image
   - selling in-game (sell box): stock +1   (done by the plugin)
   - amount == 0  -> hidden from shop/sell-list
 Packages (sv_packages / sv_package_items): bundles bought with coins (no stock).
+Quests (sv_quests / sv_quest_items / sv_quest_progress / sv_quest_completions) +
+item types (sv_item_types): DDL owned by shop-api; this module only does CRUD/SELECT.
 """
+import datetime
 import secrets
 import string
 import pymysql
@@ -141,27 +144,57 @@ def list_market(include_hidden: bool = False, exclude_ids=None, only_ids=None):
         if ids:
             clauses.append(f"item_id NOT IN ({','.join(['%s'] * len(ids))})")
             params.extend(ids)
-    where = "WHERE " + " AND ".join(clauses)
+    where = "WHERE " + " AND ".join("m." + c for c in clauses)
     with _conn() as c, c.cursor() as cur:
-        cur.execute(f"SELECT item_id, name, price, amount, image_url FROM `{SV}market` {where} "
-                    f"ORDER BY price ASC, name ASC;", params)
+        # name/image_url/type_id ย้ายไปอยู่ที่ sv_items (master catalog) แล้ว — JOIN เพื่อแสดง
+        cur.execute(
+            f"SELECT m.item_id, i.name, m.price, m.amount, i.image_url, "
+            f"i.type_id, t.name AS type_name "
+            f"FROM `{SV}market` m "
+            f"LEFT JOIN `{SV}items` i ON i.id = m.item_id "
+            f"LEFT JOIN `{SV}item_types` t ON t.id = i.type_id "
+            f"{where} ORDER BY m.price ASC, i.name ASC;", params)
         return cur.fetchall()
 
 
 def get_market(item_id: int):
     with _conn() as c, c.cursor() as cur:
-        cur.execute(f"SELECT item_id, name, price, amount, image_url, enabled "
-                    f"FROM `{SV}market` WHERE item_id=%s LIMIT 1;", (item_id,))
+        cur.execute(
+            f"SELECT m.item_id, i.name, m.price, m.base_price, m.target_stock, m.elasticity, "
+            f"m.amount, i.image_url, m.enabled, i.type_id, i.description "
+            f"FROM `{SV}market` m LEFT JOIN `{SV}items` i ON i.id = m.item_id "
+            f"WHERE m.item_id=%s LIMIT 1;", (item_id,))
         return cur.fetchone()
 
 
-def upsert_market(item_id: int, name: str, price: float, amount: int, image_url=None):
+def item_exists(item_id: int) -> bool:
+    """เช็คว่ามีแถวใน sv_items (master catalog) — ใช้ก่อน upsert sv_market"""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"SELECT 1 FROM `{SV}items` WHERE id=%s LIMIT 1;", (int(item_id),))
+        return cur.fetchone() is not None
+
+
+def upsert_market_item(item_id: int, base_price: float, amount: int,
+                       target_stock: int = None, elasticity: float = 1.0):
+    """
+    Upsert ของในตลาดด้วยโมเดลราคา supply/demand:
+      - base_price: ราคาฐาน (anchor) ที่ pricing cron ของ API ใช้
+      - target_stock: สต็อกเป้าหมาย (ค่าเริ่มต้น = stock ปัจจุบัน หรือ 100)
+      - elasticity: ความยืดหยุ่นราคา (default 1.0)
+    name/image_url/type_id อยู่ที่ sv_items แล้ว — ต้องเพิ่มที่ master catalog ก่อนเรียกฟังก์ชันนี้
+    price ตั้งค่าเริ่มต้น = base_price เพื่อกันไม่ให้เป็น 0 ก่อน cron ของ API tick แรก
+    """
+    if target_stock is None or target_stock <= 0:
+        target_stock = amount if amount > 0 else 100
+    cols = "item_id, price, base_price, target_stock, elasticity, amount, enabled"
     with _conn() as c, c.cursor() as cur:
         cur.execute(
-            f"INSERT INTO `{SV}market` (item_id, name, price, amount, image_url, enabled) "
-            f"VALUES (%s,%s,%s,%s,%s,1) ON DUPLICATE KEY UPDATE "
-            f"name=%s, price=%s, amount=%s, image_url=COALESCE(%s,image_url), enabled=1;",
-            (item_id, name, price, amount, image_url, name, price, amount, image_url))
+            f"INSERT INTO `{SV}market` ({cols}) "
+            f"VALUES (%s,%s,%s,%s,%s,%s,1) ON DUPLICATE KEY UPDATE "
+            f"price=%s, base_price=%s, target_stock=%s, elasticity=%s, "
+            f"amount=%s, enabled=1;",
+            (item_id, base_price, base_price, target_stock, elasticity, amount,
+             base_price, base_price, target_stock, elasticity, amount))
 
 
 def remove_market(item_id: int) -> bool:
@@ -210,6 +243,9 @@ def buy_market(discord_id: int, item_id: int):
             code = _gen_code()
             cur.execute(f"INSERT INTO `{RC}codes` (code, max_uses) VALUES (%s, 1);", (code,))
             code_id = cur.lastrowid
+            # บันทึกเจ้าของโค้ด เพื่อให้ shop-api รู้ว่าใครเป็นคนซื้อ (ตาราง sv_code_owners สร้างโดย API ตอน startup)
+            cur.execute(f"INSERT INTO `{SV}code_owners` (code_id, steam_id) VALUES (%s,%s);",
+                        (code_id, steam_id))
             cur.execute(f"INSERT INTO `{RC}code_items` (code_id, item_id, amount) VALUES (%s,%s,1);",
                         (code_id, item_id))
             cur.execute(f"INSERT INTO `{SV}market_log` (steam_id,item_id,amount,coins,kind) "
@@ -274,6 +310,9 @@ def buy_basket(discord_id: int, items: dict):
             code = _gen_code()
             cur.execute(f"INSERT INTO `{RC}codes` (code, max_uses) VALUES (%s, 1);", (code,))
             code_id = cur.lastrowid
+            # บันทึกเจ้าของโค้ด เพื่อให้ shop-api รู้ว่าใครเป็นคนซื้อ (ตาราง sv_code_owners สร้างโดย API ตอน startup)
+            cur.execute(f"INSERT INTO `{SV}code_owners` (code_id, steam_id) VALUES (%s,%s);",
+                        (code_id, steam_id))
             for item_id, qty, cost in details:
                 cur.execute(f"INSERT INTO `{RC}code_items` (code_id, item_id, amount) VALUES (%s,%s,%s);",
                             (code_id, item_id, qty))
@@ -403,6 +442,321 @@ def create_redeem_code(max_uses: int, items, code: str = None) -> str:
 
 
 # ---------- coin transfer ----------
+
+# ---------- item types (sv_item_types — DDL owned by shop-api) ----------
+
+def list_item_types():
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"SELECT id, name, description FROM `{SV}item_types` ORDER BY id ASC;")
+        return cur.fetchall()
+
+
+def get_item_type(type_id: int):
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"SELECT id, name, description FROM `{SV}item_types` WHERE id=%s LIMIT 1;", (type_id,))
+        return cur.fetchone()
+
+
+def upsert_item_type(type_id, name: str, description: str = None):
+    """type_id เป็น None = สร้างใหม่, มี = แก้ของเดิม. คืนค่า id"""
+    with _conn() as c, c.cursor() as cur:
+        if type_id:
+            cur.execute(f"UPDATE `{SV}item_types` SET name=%s, description=%s WHERE id=%s;",
+                        (name, description, int(type_id)))
+            return int(type_id)
+        cur.execute(f"INSERT INTO `{SV}item_types` (name, description) VALUES (%s,%s);",
+                    (name, description))
+        return cur.lastrowid
+
+
+def delete_item_type(type_id: int) -> bool:
+    # type_id ย้ายไปอยู่ที่ sv_items แล้ว — FK ที่ API สร้างเป็น ON DELETE SET NULL
+    # แต่ถ้า MySQL ไม่ได้ enforce SET NULL (เช่น engine ไม่ใช่ InnoDB) ก็ปลด manual ด้วย
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"UPDATE `{SV}items` SET type_id=NULL WHERE type_id=%s;", (type_id,))
+        cur.execute(f"DELETE FROM `{SV}item_types` WHERE id=%s;", (type_id,))
+        return cur.rowcount > 0
+
+
+# ---------- sv_items master catalog (DDL owned by shop-api) ----------
+
+def list_items(query: str = None, type_id=None):
+    """List master catalog. ถ้าให้ query/type_id ใช้กรอง"""
+    clauses = []
+    params = []
+    if query:
+        clauses.append("(i.name LIKE %s OR CAST(i.id AS CHAR) LIKE %s)")
+        like = f"%{query}%"
+        params.extend([like, like])
+    if type_id is not None:
+        clauses.append("i.type_id = %s")
+        params.append(int(type_id))
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT i.id, i.name, i.description, i.image_url, i.type_id, t.name AS type_name "
+            f"FROM `{SV}items` i LEFT JOIN `{SV}item_types` t ON t.id = i.type_id "
+            f"{where} ORDER BY i.id ASC;", params)
+        return cur.fetchall()
+
+
+def get_item(item_id: int):
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT i.id, i.name, i.description, i.image_url, i.type_id, t.name AS type_name "
+            f"FROM `{SV}items` i LEFT JOIN `{SV}item_types` t ON t.id = i.type_id "
+            f"WHERE i.id=%s LIMIT 1;", (int(item_id),))
+        return cur.fetchone()
+
+
+def upsert_item(item_id: int, name: str, description=None, image_url=None, type_id=None):
+    """
+    Master catalog upsert. item_id เป็น PK (กำหนดเอง ไม่ auto).
+    ถ้ามีอยู่แล้ว update; ไม่มีก็ insert
+    """
+    iid = int(item_id)
+    tid = int(type_id) if type_id else None
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO `{SV}items` (id, name, description, image_url, type_id) "
+            f"VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+            f"name=%s, description=%s, image_url=%s, type_id=%s;",
+            (iid, name, description, image_url, tid,
+             name, description, image_url, tid))
+        return iid
+
+
+def delete_item(item_id: int):
+    """
+    ลบจาก master catalog. คืน (ok, reason):
+      - (True, None) ลบสำเร็จ
+      - (False, 'not_found')
+      - (False, 'referenced_market') ยังถูกใช้ใน sv_market
+      - (False, 'referenced_quest') ยังถูกใช้ใน sv_quest_items
+    """
+    iid = int(item_id)
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"SELECT 1 FROM `{SV}items` WHERE id=%s LIMIT 1;", (iid,))
+        if not cur.fetchone():
+            return (False, "not_found")
+        cur.execute(f"SELECT 1 FROM `{SV}market` WHERE item_id=%s LIMIT 1;", (iid,))
+        if cur.fetchone():
+            return (False, "referenced_market")
+        cur.execute(f"SELECT 1 FROM `{SV}quest_items` WHERE item_id=%s LIMIT 1;", (iid,))
+        if cur.fetchone():
+            return (False, "referenced_quest")
+        cur.execute(f"DELETE FROM `{SV}items` WHERE id=%s;", (iid,))
+        return (True, None)
+
+
+# ---------- quests (sv_quests etc. — DDL owned by shop-api) ----------
+
+def period_key(reset_type: str) -> str:
+    """
+    คีย์ช่วงเวลาของเควสต์ — ต้องตรงกับที่ shop-api และ SellVault plugin ใช้:
+      once   -> 'lifetime'
+      daily  -> server local YYYY-MM-DD
+      weekly -> ISO week 'YYYY-Www'
+    """
+    rt = (reset_type or "daily").lower()
+    if rt == "once":
+        return "lifetime"
+    now = datetime.datetime.now()
+    if rt == "weekly":
+        iso = now.isocalendar()
+        return f"{iso[0]:04d}-W{iso[1]:02d}"
+    return now.strftime("%Y-%m-%d")
+
+
+def _quest_active_clause():
+    """SQL clause for active+in-window quests; no params required."""
+    return ("enabled=1 "
+            "AND (start_at IS NULL OR start_at <= NOW()) "
+            "AND (end_at IS NULL OR end_at > NOW())")
+
+
+def list_quests_with_progress(steam_id: int, only_active: bool = True):
+    """
+    คืนรายการเควสต์ พร้อม progress ของผู้เล่นในช่วงเวลาปัจจุบัน
+      [{id, name, description, reward_coins, reset_type, period_key, completed,
+        items: [{item_id, item_name, qty_required, sold_qty}]}]
+    """
+    where = _quest_active_clause() if only_active else "1=1"
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT id, name, description, reward_coins, reset_type, start_at, end_at "
+            f"FROM `{SV}quests` WHERE {where} ORDER BY id ASC;")
+        quests = cur.fetchall()
+        if not quests:
+            return []
+        qids = [int(q["id"]) for q in quests]
+        placeholders = ",".join(["%s"] * len(qids))
+        # ดึง items + progress ของผู้เล่นในแต่ละ period_key
+        cur.execute(
+            f"SELECT qi.quest_id, qi.item_id, qi.qty_required, m.name AS item_name "
+            f"FROM `{SV}quest_items` qi "
+            f"LEFT JOIN `{SV}market` m ON m.item_id = qi.item_id "
+            f"WHERE qi.quest_id IN ({placeholders}) ORDER BY qi.quest_id, qi.item_id;",
+            qids)
+        items_rows = cur.fetchall()
+
+        # progress + completion ต่อ period_key ของแต่ละเควสต์
+        progress_map = {}  # (quest_id, item_id) -> sold_qty
+        completed_set = set()  # quest_id ที่ completed แล้วใน period นี้
+        for q in quests:
+            pk = period_key(q["reset_type"])
+            q["period_key"] = pk
+            cur.execute(
+                f"SELECT item_id, sold_qty FROM `{SV}quest_progress` "
+                f"WHERE quest_id=%s AND steam_id=%s AND period_key=%s;",
+                (int(q["id"]), steam_id, pk))
+            for r in cur.fetchall():
+                progress_map[(int(q["id"]), int(r["item_id"]))] = int(r["sold_qty"])
+            cur.execute(
+                f"SELECT 1 FROM `{SV}quest_completions` "
+                f"WHERE quest_id=%s AND steam_id=%s AND period_key=%s LIMIT 1;",
+                (int(q["id"]), steam_id, pk))
+            if cur.fetchone():
+                completed_set.add(int(q["id"]))
+
+        by_quest = {}
+        for r in items_rows:
+            qid = int(r["quest_id"])
+            by_quest.setdefault(qid, []).append({
+                "item_id": int(r["item_id"]),
+                "item_name": r["item_name"] or f"item {r['item_id']}",
+                "qty_required": int(r["qty_required"]),
+                "sold_qty": int(progress_map.get((qid, int(r["item_id"])), 0)),
+            })
+        for q in quests:
+            q["items"] = by_quest.get(int(q["id"]), [])
+            q["completed"] = int(q["id"]) in completed_set
+        return quests
+
+
+def get_quest_detail(quest_id: int, steam_id: int):
+    """รายละเอียดเควสต์เดียว + progress ของผู้เล่นใน period ปัจจุบัน. คืน None ถ้าไม่พบ"""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT id, name, description, reward_coins, reset_type, enabled, "
+            f"start_at, end_at FROM `{SV}quests` WHERE id=%s LIMIT 1;", (quest_id,))
+        q = cur.fetchone()
+        if not q:
+            return None
+        pk = period_key(q["reset_type"])
+        q["period_key"] = pk
+        cur.execute(
+            f"SELECT qi.item_id, qi.qty_required, m.name AS item_name, "
+            f"COALESCE(qp.sold_qty, 0) AS sold_qty "
+            f"FROM `{SV}quest_items` qi "
+            f"LEFT JOIN `{SV}market` m ON m.item_id = qi.item_id "
+            f"LEFT JOIN `{SV}quest_progress` qp ON qp.quest_id=qi.quest_id "
+            f"  AND qp.item_id=qi.item_id AND qp.steam_id=%s AND qp.period_key=%s "
+            f"WHERE qi.quest_id=%s ORDER BY qi.item_id;",
+            (steam_id, pk, quest_id))
+        q["items"] = [{
+            "item_id": int(r["item_id"]),
+            "item_name": r["item_name"] or f"item {r['item_id']}",
+            "qty_required": int(r["qty_required"]),
+            "sold_qty": int(r["sold_qty"]),
+        } for r in cur.fetchall()]
+        cur.execute(
+            f"SELECT completed_at FROM `{SV}quest_completions` "
+            f"WHERE quest_id=%s AND steam_id=%s AND period_key=%s LIMIT 1;",
+            (quest_id, steam_id, pk))
+        row = cur.fetchone()
+        q["completed"] = row is not None
+        q["completed_at"] = row["completed_at"] if row else None
+        return q
+
+
+def list_completed_quests(steam_id: int, limit: int = 20):
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT qc.quest_id, qc.period_key, qc.reward_coins, qc.completed_at, q.name "
+            f"FROM `{SV}quest_completions` qc "
+            f"JOIN `{SV}quests` q ON q.id = qc.quest_id "
+            f"WHERE qc.steam_id=%s ORDER BY qc.completed_at DESC LIMIT %s;",
+            (steam_id, int(limit)))
+        return cur.fetchall()
+
+
+def create_quest(name: str, description: str, reward_coins: int, reset_type: str,
+                 items, enabled: bool = True, start_at=None, end_at=None) -> int:
+    """items: list of (item_id, qty_required). คืน quest_id"""
+    rt = (reset_type or "daily").lower()
+    if rt not in ("once", "daily", "weekly"):
+        rt = "daily"
+    conn = _conn(); conn.autocommit(False)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO `{SV}quests` (name, description, reward_coins, reset_type, "
+                f"enabled, start_at, end_at) VALUES (%s,%s,%s,%s,%s,%s,%s);",
+                (name, description, int(reward_coins), rt, 1 if enabled else 0, start_at, end_at))
+            qid = cur.lastrowid
+            for item_id, qty in items:
+                if int(qty) <= 0:
+                    continue
+                cur.execute(
+                    f"INSERT INTO `{SV}quest_items` (quest_id, item_id, qty_required) "
+                    f"VALUES (%s,%s,%s);", (qid, int(item_id), int(qty)))
+        conn.commit()
+        return qid
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+
+
+def update_quest(quest_id: int, name: str, description: str, reward_coins: int,
+                 reset_type: str, items, enabled: bool = True,
+                 start_at=None, end_at=None) -> bool:
+    """อัปเดต metadata + แทนที่รายการ items ทั้งหมด. items: list of (item_id, qty_required)"""
+    rt = (reset_type or "daily").lower()
+    if rt not in ("once", "daily", "weekly"):
+        rt = "daily"
+    conn = _conn(); conn.autocommit(False)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE `{SV}quests` SET name=%s, description=%s, reward_coins=%s, "
+                f"reset_type=%s, enabled=%s, start_at=%s, end_at=%s WHERE id=%s;",
+                (name, description, int(reward_coins), rt, 1 if enabled else 0,
+                 start_at, end_at, int(quest_id)))
+            changed = cur.rowcount
+            if items is not None:
+                cur.execute(f"DELETE FROM `{SV}quest_items` WHERE quest_id=%s;", (int(quest_id),))
+                for item_id, qty in items:
+                    if int(qty) <= 0:
+                        continue
+                    cur.execute(
+                        f"INSERT INTO `{SV}quest_items` (quest_id, item_id, qty_required) "
+                        f"VALUES (%s,%s,%s);", (int(quest_id), int(item_id), int(qty)))
+        conn.commit()
+        return changed > 0
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+
+
+def delete_quest(quest_id: int) -> bool:
+    """ลบเควสต์. sv_quest_items มี ON DELETE CASCADE ตาม DDL ของ API; progress/completions ลบเอง"""
+    conn = _conn(); conn.autocommit(False)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM `{SV}quest_progress` WHERE quest_id=%s;", (int(quest_id),))
+            cur.execute(f"DELETE FROM `{SV}quest_completions` WHERE quest_id=%s;", (int(quest_id),))
+            cur.execute(f"DELETE FROM `{SV}quests` WHERE id=%s;", (int(quest_id),))
+            ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+
 
 def transfer_coins(from_discord: int, to_discord: int, amount: int):
     if amount <= 0:

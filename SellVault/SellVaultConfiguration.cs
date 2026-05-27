@@ -65,6 +65,9 @@ namespace SellVault
         /// <summary>Cooldown in seconds between PvP kill rewards for the same killer→victim pair (anti-farm).</summary>
         public int PvpRewardCooldownSeconds;
 
+        /// <summary>Seconds between automatic re-reads of the market price table. Set 0 to disable auto-refresh (manual /sellreload only).</summary>
+        public float PriceRefreshIntervalSeconds;
+
         [XmlArray("WelcomePackItems")]
         [XmlArrayItem("Item")]
         public WelcomeItem[] WelcomePackItems;
@@ -87,6 +90,11 @@ namespace SellVault
         public Message MsgReloaded;      // {count}
         public Message MsgError;
         public Message MsgOnlineReward;  // {coins}
+
+        /// <summary>Enable quest progress tracking on sale.</summary>
+        public bool QuestCheckEnabled;
+        /// <summary>Chat message on quest completion. Placeholders: {name}, {reward_coins}.</summary>
+        public Message MessageQuestComplete;
 
         public void LoadDefaults()
         {
@@ -114,6 +122,7 @@ namespace SellVault
             ActivityBuildPlaced = 2;
             ActivityResourceHarvested = 1;
             PvpRewardCooldownSeconds = 120;
+            PriceRefreshIntervalSeconds = 30f;
 
             MsgLinkUsage = new Message(
                 "ใช้: /link <code> (กดปุ่ม Welcome Pack ใน Discord เพื่อรับ code) | Use: /link <code> from Discord", "yellow");
@@ -139,6 +148,10 @@ namespace SellVault
             MsgReloaded = new Message("[SellVault] โหลด market ใหม่ {count} รายการ | reloaded {count} items", "green");
             MsgError = new Message("เกิดข้อผิดพลาด ลองใหม่ | Something went wrong", "red");
             MsgOnlineReward = new Message("⏱ ออนไลน์รับ +{coins} Coin | Playtime reward +{coins} Coin", "green");
+
+            QuestCheckEnabled = true;
+            MessageQuestComplete = new Message(
+                "🏆 เควสต์ '{name}' เสร็จสมบูรณ์! +{reward_coins} Coin | Quest '{name}' complete! +{reward_coins} Coin", "green");
         }
     }
 }

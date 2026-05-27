@@ -393,9 +393,55 @@ async def top(interaction: discord.Interaction):
     await interaction.response.send_message(embed=await build_top_embed())
 
 
-@bot.tree.command(description="ดูรายการตลาด + ใส่ตะกร้า / market list")
+def _group_market_by_type(items):
+    """แบ่งไอเทมตาม type_id; คืน list of (type_id, type_name, [items]).
+    หมวดที่ไม่มี type_id อยู่ท้ายสุด. หมวดว่างจะถูกข้าม."""
+    buckets = {}
+    order = []  # รักษาลำดับการเจอ (เรียงตาม price อยู่แล้วใน list_market)
+    for it in items:
+        tid = it.get("type_id")
+        key = int(tid) if tid is not None else None
+        if key not in buckets:
+            buckets[key] = {"name": it.get("type_name") or "ไม่มีหมวด", "items": []}
+            order.append(key)
+        buckets[key]["items"].append(it)
+    # ดัน None ไปท้ายสุดเสมอ
+    order_sorted = [k for k in order if k is not None] + ([None] if None in buckets else [])
+    return [(k, buckets[k]["name"], buckets[k]["items"]) for k in order_sorted if buckets[k]["items"]]
+
+
+def market_group_embed(type_name: str, items) -> discord.Embed:
+    e = discord.Embed(title=f"🏷️ {type_name}", color=0xE67E22)
+    lines = []
+    for it in items:
+        price = int(round(float(it["price"])))
+        sell = sell_payout_price(it["price"])
+        lines.append(
+            f"`{it['item_id']}` · **{it['name']}** — ซื้อ {price} / ขาย ~{sell} "
+            f"{config.COIN_NAME} · สต็อก {int(it['amount'])}")
+    text = "\n".join(lines)
+    # embed description รับได้ ~4096 chars; ตัดกันเกินกรณีหมวดยาวมาก
+    if len(text) > 4000:
+        text = text[:3990] + "\n…"
+    e.description = text or "_(ว่าง)_"
+    e.set_footer(text=f"{len(items)} รายการ")
+    return e
+
+
+@bot.tree.command(description="ดูรายการตลาดแบ่งตามหมวด / market grouped by type")
 async def market(interaction: discord.Interaction):
-    await send_shop(interaction)
+    items = await asyncio.to_thread(db.list_market, False, config.BILL_ITEM_IDS, None)
+    if not items:
+        await interaction.response.send_message("ยังไม่มีรายการ | No items.", ephemeral=True)
+        return
+    groups = _group_market_by_type(items)
+    embeds = [market_group_embed(name, its) for _tid, name, its in groups]
+    # Discord อนุญาตสูงสุด 10 embeds ต่อข้อความ — ถ้าหมวดเกิน 10 ใช้ followup ต่อ
+    first, rest = embeds[:10], embeds[10:]
+    await interaction.response.send_message(embeds=first, ephemeral=True)
+    while rest:
+        chunk, rest = rest[:10], rest[10:]
+        await interaction.followup.send(embeds=chunk, ephemeral=True)
 
 
 @bot.tree.command(description="โอน Coin ให้ผู้เล่นอื่น / transfer coins")
@@ -417,35 +463,130 @@ async def pay(interaction: discord.Interaction, member: discord.Member, amount: 
             f"✅ โอน {amount} {config.COIN_NAME} ให้ {member.mention} (เหลือ {payload})", ephemeral=True)
 
 
+def _quest_status_emoji(q) -> str:
+    return "✅" if q.get("completed") else "🟡"
+
+
+def _quest_progress_line(it) -> str:
+    done = int(it["sold_qty"]) >= int(it["qty_required"])
+    mark = "✅" if done else "❌"
+    return f"{mark} {it['sold_qty']}/{it['qty_required']} {it['item_name']}"
+
+
+def quest_summary_embed(quests) -> discord.Embed:
+    e = discord.Embed(title="📜 เควสต์ปัจจุบัน / Active Quests", color=0xF1C40F)
+    if not quests:
+        e.description = "ยังไม่มีเควสต์ที่เปิดอยู่ในช่วงนี้"
+        return e
+    for q in quests:
+        parts = [_quest_progress_line(it) for it in q["items"]]
+        status = _quest_status_emoji(q)
+        body = " + ".join(parts) if parts else "_(ไม่มี items)_"
+        e.add_field(
+            name=f"{status} #{q['id']} {q['name']} — รางวัล {int(q['reward_coins'])} {config.COIN_NAME}",
+            value=f"{body}\n_reset: {q['reset_type']} · period: `{q['period_key']}`_",
+            inline=False)
+    e.set_footer(text="ขายไอเทมที่กำหนดในเกมเพื่อสะสม progress · /quest <id> ดูรายละเอียด")
+    return e
+
+
+def quest_detail_embed(q) -> discord.Embed:
+    color = 0x2ECC71 if q.get("completed") else 0x3498DB
+    e = discord.Embed(title=f"📜 #{q['id']} {q['name']}",
+                      description=q.get("description") or "_(ไม่มีคำอธิบาย)_",
+                      color=color)
+    e.add_field(name="รางวัล / Reward",
+                value=f"{int(q['reward_coins'])} {config.COIN_NAME}", inline=True)
+    e.add_field(name="Reset", value=str(q["reset_type"]), inline=True)
+    e.add_field(name="Period", value=f"`{q['period_key']}`", inline=True)
+    if q["items"]:
+        lines = [_quest_progress_line(it) for it in q["items"]]
+        e.add_field(name="ความคืบหน้า / Progress", value="\n".join(lines), inline=False)
+    else:
+        e.add_field(name="ความคืบหน้า / Progress", value="_(ไม่มี items)_", inline=False)
+    if q.get("completed"):
+        when = q.get("completed_at")
+        e.set_footer(text=f"เสร็จสมบูรณ์แล้ว ✅ {when or ''}".strip())
+    return e
+
+
+@bot.tree.command(description="ดูเควสต์ที่เปิดอยู่ + ความคืบหน้า / list quests")
+async def quests(interaction: discord.Interaction):
+    steam = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
+    if steam is None:
+        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน", ephemeral=True)
+        return
+    qs = await asyncio.to_thread(db.list_quests_with_progress, steam, True)
+    await interaction.response.send_message(embed=quest_summary_embed(qs), ephemeral=True)
+
+
+@bot.tree.command(description="ดูรายละเอียดเควสต์ตาม id / quest detail")
+@app_commands.describe(quest_id="หมายเลขเควสต์ (ดูจาก /quests)")
+async def quest(interaction: discord.Interaction, quest_id: int):
+    steam = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
+    if steam is None:
+        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน", ephemeral=True)
+        return
+    q = await asyncio.to_thread(db.get_quest_detail, quest_id, steam)
+    if not q:
+        await interaction.response.send_message(f"ไม่พบเควสต์ #{quest_id}", ephemeral=True)
+        return
+    await interaction.response.send_message(embed=quest_detail_embed(q), ephemeral=True)
+
+
 # ---------------- admin: modals ----------------
 
 class MarketModal(discord.ui.Modal, title="ตั้ง/แก้ รายการตลาด"):
-    m_item = discord.ui.TextInput(label="Item ID", max_length=10)
-    m_name = discord.ui.TextInput(label="ชื่อ / Name", max_length=64)
-    m_price = discord.ui.TextInput(label="ราคาเริ่มต้น (Coin) / Price", max_length=12)
-    m_amount = discord.ui.TextInput(label="สต็อกเริ่มต้น / Stock (0 = ซ่อน)", default="0", max_length=8)
-    m_image = discord.ui.TextInput(label="ลิงก์รูป / Image URL (optional)", required=False, max_length=400)
+    # โมเดลราคา supply/demand: base_price = ราคาฐาน, target_stock = สต็อกเป้าหมาย, elasticity = ความยืดหยุ่น
+    # name/image/type_id ย้ายไปอยู่ที่ sv_items (master catalog) — แก้ผ่านปุ่ม "📦 จัดการ Items"
+    m_item = discord.ui.TextInput(label="Item ID (ต้องมีอยู่ใน catalog แล้ว)", max_length=10)
+    m_base_price = discord.ui.TextInput(label="Base price (Coin) — ราคาฐาน", max_length=12)
+    m_stock = discord.ui.TextInput(
+        label="Stock / target / elas",
+        placeholder="เช่น  10 / 100 / 1.0  (เว้น target = stock, elas = 1.0)",
+        max_length=64)
 
     def __init__(self, prefill=None):
         super().__init__()
         if prefill:
             self.m_item.default = str(prefill["item_id"])
-            self.m_name.default = prefill.get("name") or ""
-            self.m_price.default = str(int(round(float(prefill["price"]))))
-            self.m_amount.default = str(int(prefill["amount"]))
-            self.m_image.default = prefill.get("image_url") or ""
+            bp = prefill.get("base_price")
+            if bp is None or float(bp) == 0:
+                bp = prefill.get("price") or 0
+            self.m_base_price.default = str(int(round(float(bp))))
+            stock = int(prefill["amount"])
+            tgt = int(prefill.get("target_stock") or 0) or stock or 100
+            elas = float(prefill.get("elasticity") or 1.0) or 1.0
+            self.m_stock.default = f"{stock} / {tgt} / {elas}"
 
     async def on_submit(self, interaction: discord.Interaction):
+        raw = str(self.m_stock.value).strip()
+        parts = [p.strip() for p in raw.split("/")]
         try:
-            iid = int(str(self.m_item.value)); pr = float(str(self.m_price.value))
-            amt = int(str(self.m_amount.value) or "0")
+            iid = int(str(self.m_item.value))
+            bp = float(str(self.m_base_price.value))
+            amt = int(parts[0]) if parts and parts[0] else 0
+            tgt_raw = parts[1] if len(parts) > 1 and parts[1] else ""
+            elas_raw = parts[2] if len(parts) > 2 and parts[2] else ""
+            target_stock = int(tgt_raw) if tgt_raw else (amt if amt > 0 else 100)
+            elasticity = float(elas_raw) if elas_raw else 1.0
         except ValueError:
-            await interaction.response.send_message("ตัวเลขไม่ถูกต้อง (Item ID / Price / Stock)", ephemeral=True)
+            await interaction.response.send_message(
+                "ตัวเลขไม่ถูกต้อง (Item ID / Base price / Stock-Target-Elas)", ephemeral=True)
             return
-        img = str(self.m_image.value).strip() or None
-        await asyncio.to_thread(db.upsert_market, iid, str(self.m_name.value), pr, amt, img)
+        # ต้องมีใน master catalog ก่อน — กันสร้าง market row ที่ JOIN แล้วได้ name=NULL
+        exists = await asyncio.to_thread(db.item_exists, iid)
+        if not exists:
+            await interaction.response.send_message(
+                f"Item ID `{iid}` ยังไม่อยู่ใน catalog — เพิ่มผ่าน '📦 จัดการ Items' ก่อน",
+                ephemeral=True)
+            return
+        await asyncio.to_thread(db.upsert_market_item, iid, bp, amt, target_stock, elasticity)
+        item = await asyncio.to_thread(db.get_item, iid)
+        nm = (item or {}).get("name") or f"item {iid}"
         await interaction.response.send_message(
-            f"ตั้งรายการ `{iid}` **{self.m_name.value}** ราคา {int(round(pr))} สต็อก {amt} ✅\n*(ในเกม /sellreload)*",
+            f"ตั้งรายการ `{iid}` **{nm}** base {int(round(bp))} "
+            f"stock {amt} target {target_stock} elas {elasticity} ✅\n*(ในเกม /sellreload)*",
             ephemeral=True)
 
 
@@ -566,6 +707,172 @@ class GiveCoinsModal(discord.ui.Modal, title="ให้ / ปรับ Coin"):
                                                 ephemeral=True)
 
 
+# ---------------- admin: quests + item types ----------------
+
+def _parse_quest_items(raw: str):
+    """แปลง "121:10 / 122:5 / 130:3" -> [(121,10),(122,5),(130,3)]"""
+    out = []
+    for tok in str(raw or "").split("/"):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if ":" not in tok:
+            raise ValueError(f"ไม่มี ':' ใน '{tok}'")
+        sid, amt = tok.split(":", 1)
+        out.append((int(sid.strip()), int(amt.strip())))
+    if not out:
+        raise ValueError("ต้องมีอย่างน้อย 1 ไอเทม")
+    return out
+
+
+class QuestCreateModal(discord.ui.Modal, title="📜 สร้างเควสต์"):
+    # Discord modal limit = 5 fields. items field ใช้รูปแบบคั่นด้วย ' / ' เพื่อใส่หลายไอเทม
+    m_name = discord.ui.TextInput(label="ชื่อ / Name", max_length=128)
+    m_desc = discord.ui.TextInput(label="คำอธิบาย / Description",
+                                  style=discord.TextStyle.paragraph,
+                                  required=False, max_length=500)
+    m_reward = discord.ui.TextInput(label="รางวัล (Coin)", max_length=12)
+    m_reset = discord.ui.TextInput(label="Reset type (once / daily / weekly)",
+                                   default="daily", max_length=10)
+    m_items = discord.ui.TextInput(label="Items (id:qty / id:qty / ...)",
+                                   placeholder="121:10 / 122:5 / 130:3", max_length=300)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            reward = int(str(self.m_reward.value))
+            items = _parse_quest_items(str(self.m_items.value))
+        except ValueError as e:
+            await interaction.response.send_message(f"รูปแบบไม่ถูกต้อง: {e}", ephemeral=True)
+            return
+        reset = str(self.m_reset.value).strip().lower() or "daily"
+        if reset not in ("once", "daily", "weekly"):
+            await interaction.response.send_message("Reset type ต้องเป็น once / daily / weekly", ephemeral=True)
+            return
+        try:
+            qid = await asyncio.to_thread(
+                db.create_quest, str(self.m_name.value),
+                str(self.m_desc.value) or None, reward, reset, items)
+        except Exception:
+            log.exception("create_quest failed")
+            await interaction.response.send_message("สร้างเควสต์ล้มเหลว ดู log", ephemeral=True)
+            return
+        item_lines = "\n".join(f"  • `{i}` x{q}" for i, q in items)
+        await interaction.response.send_message(
+            f"สร้างเควสต์ `#{qid}` **{self.m_name.value}** ({reset}) รางวัล {reward} "
+            f"{config.COIN_NAME} ✅\n{item_lines}", ephemeral=True)
+
+
+class QuestEditModal(discord.ui.Modal, title="✏️ แก้เควสต์"):
+    m_id = discord.ui.TextInput(label="Quest ID", max_length=10)
+    m_name = discord.ui.TextInput(label="ชื่อ (เว้น = ไม่เปลี่ยน)", required=False, max_length=128)
+    m_reward = discord.ui.TextInput(label="รางวัล / reset (เช่น  500 / daily)",
+                                    placeholder="เว้นว่าง = คงเดิม",
+                                    required=False, max_length=40)
+    m_desc = discord.ui.TextInput(label="คำอธิบาย (เว้น = ไม่เปลี่ยน)",
+                                  style=discord.TextStyle.paragraph,
+                                  required=False, max_length=500)
+    m_items = discord.ui.TextInput(label="Items (เว้น = ไม่เปลี่ยน)",
+                                   placeholder="121:10 / 122:5",
+                                   required=False, max_length=300)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qid = int(str(self.m_id.value))
+        except ValueError:
+            await interaction.response.send_message("Quest ID ไม่ถูกต้อง", ephemeral=True)
+            return
+        cur = await asyncio.to_thread(db.get_quest_detail, qid, 0)
+        if not cur:
+            await interaction.response.send_message(f"ไม่พบเควสต์ #{qid}", ephemeral=True)
+            return
+
+        name = str(self.m_name.value).strip() or cur["name"]
+        desc_raw = str(self.m_desc.value)
+        desc = desc_raw if desc_raw.strip() else (cur.get("description") or "")
+
+        reward = int(cur["reward_coins"])
+        reset = cur["reset_type"]
+        rr_raw = str(self.m_reward.value).strip()
+        if rr_raw:
+            parts = [p.strip() for p in rr_raw.split("/")]
+            try:
+                if parts[0]:
+                    reward = int(parts[0])
+                if len(parts) > 1 and parts[1]:
+                    cand = parts[1].lower()
+                    if cand in ("once", "daily", "weekly"):
+                        reset = cand
+            except ValueError:
+                await interaction.response.send_message("รางวัล/reset ไม่ถูกต้อง", ephemeral=True)
+                return
+
+        items_raw = str(self.m_items.value).strip()
+        if items_raw:
+            try:
+                items = _parse_quest_items(items_raw)
+            except ValueError as e:
+                await interaction.response.send_message(f"รูปแบบ items ผิด: {e}", ephemeral=True)
+                return
+        else:
+            items = [(it["item_id"], it["qty_required"]) for it in cur["items"]]
+
+        try:
+            await asyncio.to_thread(db.update_quest, qid, name, desc, reward, reset, items, True)
+        except Exception:
+            log.exception("update_quest failed")
+            await interaction.response.send_message("แก้เควสต์ล้มเหลว ดู log", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"แก้เควสต์ `#{qid}` **{name}** ({reset}) รางวัล {reward} ✅", ephemeral=True)
+
+
+class QuestDeleteModal(discord.ui.Modal, title="🗑️ ลบเควสต์"):
+    m_id = discord.ui.TextInput(label="Quest ID", max_length=10)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qid = int(str(self.m_id.value))
+        except ValueError:
+            await interaction.response.send_message("Quest ID ไม่ถูกต้อง", ephemeral=True)
+            return
+        ok = await asyncio.to_thread(db.delete_quest, qid)
+        await interaction.response.send_message(
+            f"ลบเควสต์ #{qid} ✅" if ok else f"ไม่พบเควสต์ #{qid}", ephemeral=True)
+
+
+class ItemTypeModal(discord.ui.Modal, title="🏷️ จัดการ Item Types"):
+    # ใช้ฟอร์มเดียวสำหรับ add/edit/delete: เว้น id = สร้างใหม่; เว้น name+desc แต่ใส่ id+'del' = ลบ
+    m_id = discord.ui.TextInput(label="Type ID (เว้น = สร้างใหม่)", required=False, max_length=10)
+    m_name = discord.ui.TextInput(label="ชื่อ / Name (เว้น+มี ID = ลบ)", required=False, max_length=64)
+    m_desc = discord.ui.TextInput(label="คำอธิบาย / Description",
+                                  required=False, style=discord.TextStyle.paragraph, max_length=250)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        tid_raw = str(self.m_id.value).strip()
+        name = str(self.m_name.value).strip()
+        desc = str(self.m_desc.value).strip() or None
+        tid = None
+        if tid_raw:
+            try:
+                tid = int(tid_raw)
+            except ValueError:
+                await interaction.response.send_message("Type ID ไม่ถูกต้อง", ephemeral=True)
+                return
+        # ลบ: มี ID แต่ไม่มี name
+        if tid is not None and not name:
+            ok = await asyncio.to_thread(db.delete_item_type, tid)
+            await interaction.response.send_message(
+                f"ลบ Type #{tid} ✅" if ok else f"ไม่พบ Type #{tid}", ephemeral=True)
+            return
+        if not name:
+            await interaction.response.send_message("ต้องระบุชื่อสำหรับสร้าง/แก้", ephemeral=True)
+            return
+        new_id = await asyncio.to_thread(db.upsert_item_type, tid, name, desc)
+        verb = "แก้" if tid else "สร้าง"
+        await interaction.response.send_message(
+            f"{verb} Type `#{new_id}` **{name}** ✅", ephemeral=True)
+
+
 # ---------------- admin: control panel ----------------
 
 class AdminPanelView(discord.ui.View):
@@ -612,6 +919,141 @@ class AdminPanelView(discord.ui.View):
         await interaction.response.send_message(
             "เลือกจากเมนูเพื่อแก้ไข/ลบ:\n" + "\n".join(lines)[:1800],
             view=AdminMarketEditView(items), ephemeral=True)
+
+    @discord.ui.button(label="📜 สร้างเควสต์", style=discord.ButtonStyle.success, custom_id="admin_quest_create",
+                       row=2)
+    async def b_quest_create(self, interaction, button):
+        if await self._guard(interaction):
+            await interaction.response.send_modal(QuestCreateModal())
+
+    @discord.ui.button(label="✏️ แก้เควสต์", style=discord.ButtonStyle.primary, custom_id="admin_quest_edit",
+                       row=2)
+    async def b_quest_edit(self, interaction, button):
+        if await self._guard(interaction):
+            await interaction.response.send_modal(QuestEditModal())
+
+    @discord.ui.button(label="🗑️ ลบเควสต์", style=discord.ButtonStyle.danger, custom_id="admin_quest_delete",
+                       row=2)
+    async def b_quest_delete(self, interaction, button):
+        if await self._guard(interaction):
+            await interaction.response.send_modal(QuestDeleteModal())
+
+    @discord.ui.button(label="🏷️ จัดการ Item Types", style=discord.ButtonStyle.secondary,
+                       custom_id="admin_item_types", row=2)
+    async def b_item_types(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        types = await asyncio.to_thread(db.list_item_types)
+        if types:
+            preview = "\n".join(f"`{t['id']}` · {t['name']}" +
+                                (f" — {t['description']}" if t.get('description') else '')
+                                for t in types[:20])
+        else:
+            preview = "_(ยังไม่มี type — ใส่ชื่อในฟอร์มเพื่อสร้าง)_"
+        await interaction.response.send_message(
+            f"**Item Types ปัจจุบัน:**\n{preview}\n\nกดเปิดฟอร์มเพื่อเพิ่ม/แก้/ลบ:",
+            view=ItemTypeFormLauncher(), ephemeral=True)
+
+    @discord.ui.button(label="📦 จัดการ Items", style=discord.ButtonStyle.primary,
+                       custom_id="admin_items", row=3)
+    async def b_items(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        items = await asyncio.to_thread(db.list_items)
+        if items:
+            head = items[:20]
+            preview = "\n".join(
+                f"`{i['id']}` · **{i['name']}**" +
+                (f" · type `{i['type_id']}`" if i.get('type_id') else '') +
+                (f" · 🖼️" if i.get('image_url') else '')
+                for i in head)
+            tail = f"\n_(แสดง 20/{len(items)})_" if len(items) > 20 else ""
+            preview += tail
+        else:
+            preview = "_(ยังไม่มี item — ใส่ ID + name ในฟอร์มเพื่อสร้าง)_"
+        await interaction.response.send_message(
+            f"**Master Catalog (sv_items):**\n{preview}\n\nกดเปิดฟอร์มเพื่อเพิ่ม/แก้/ลบ:",
+            view=ItemFormLauncher(), ephemeral=True)
+
+
+class ItemTypeFormLauncher(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="เปิดฟอร์ม Item Type", style=discord.ButtonStyle.primary)
+    async def open(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("ต้องเป็นแอดมิน", ephemeral=True)
+            return
+        await interaction.response.send_modal(ItemTypeModal())
+
+
+class ItemFormLauncher(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="เปิดฟอร์ม Item", style=discord.ButtonStyle.primary)
+    async def open(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("ต้องเป็นแอดมิน", ephemeral=True)
+            return
+        await interaction.response.send_modal(ItemModal())
+
+
+class ItemModal(discord.ui.Modal, title="📦 จัดการ Items (catalog)"):
+    # โมเดล CRUD เดียวกับ ItemTypeModal: blank ID = สร้างใหม่; ID + blank name = ลบ
+    m_id = discord.ui.TextInput(label="Item ID (ต้องระบุเสมอ)", max_length=10)
+    m_name = discord.ui.TextInput(label="ชื่อ / Name (เว้น+มี ID = ลบ)",
+                                  required=False, max_length=64)
+    m_desc = discord.ui.TextInput(label="คำอธิบาย / Description (optional)",
+                                  required=False, style=discord.TextStyle.paragraph,
+                                  max_length=500)
+    m_image = discord.ui.TextInput(label="ลิงก์รูป / Image URL (optional)",
+                                   required=False, max_length=400)
+    m_type = discord.ui.TextInput(label="Type ID (optional, ดูจาก 'จัดการ Item Types')",
+                                  required=False, max_length=10)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            iid = int(str(self.m_id.value))
+        except ValueError:
+            await interaction.response.send_message("Item ID ไม่ถูกต้อง", ephemeral=True)
+            return
+        name = str(self.m_name.value).strip()
+        # ลบ: มี ID แต่ไม่มี name
+        if not name:
+            ok, reason = await asyncio.to_thread(db.delete_item, iid)
+            if ok:
+                await interaction.response.send_message(f"ลบ Item `{iid}` ✅", ephemeral=True)
+            elif reason == "not_found":
+                await interaction.response.send_message(f"ไม่พบ Item `{iid}`", ephemeral=True)
+            elif reason == "referenced_market":
+                await interaction.response.send_message(
+                    f"ลบไม่ได้ — `{iid}` ยังอยู่ใน sv_market (ลบจากตลาดก่อน)", ephemeral=True)
+            elif reason == "referenced_quest":
+                await interaction.response.send_message(
+                    f"ลบไม่ได้ — `{iid}` ยังถูกใช้ใน sv_quest_items (ลบจากเควสต์ก่อน)", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"ลบไม่ได้: {reason}", ephemeral=True)
+            return
+
+        desc = str(self.m_desc.value).strip() or None
+        image = str(self.m_image.value).strip() or None
+        tid_raw = str(self.m_type.value).strip()
+        try:
+            tid = int(tid_raw) if tid_raw else None
+        except ValueError:
+            await interaction.response.send_message("Type ID ไม่ถูกต้อง", ephemeral=True)
+            return
+        try:
+            await asyncio.to_thread(db.upsert_item, iid, name, desc, image, tid)
+        except Exception:
+            log.exception("upsert_item failed")
+            await interaction.response.send_message("upsert ล้มเหลว ดู log", ephemeral=True)
+            return
+        tid_msg = f" type {tid}" if tid is not None else ""
+        await interaction.response.send_message(
+            f"บันทึก Item `{iid}` **{name}**{tid_msg} ✅", ephemeral=True)
 
 
 # ---------------- admin: slash ----------------

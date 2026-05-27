@@ -36,6 +36,9 @@ namespace SellVault
         private readonly List<SellVaultComponent> _components = new List<SellVaultComponent>();
         private readonly object _lock = new object();
         private readonly Queue<Action> _main = new Queue<Action>();
+        private float _nextPriceRefreshAt;
+        private int _priceRefreshInFlight;
+        private List<QuestDef> _activeQuests = new List<QuestDef>();
 
         private struct SaleEntry { public ushort Id; public int Amount; public long Coins; }
 
@@ -47,6 +50,11 @@ namespace SellVault
             _prices = Database.LoadMarketPrices();
             _boxKeys = new HashSet<string>(Database.LoadSellBoxKeys());
             _noCommissionIds = new HashSet<ushort>(Configuration.Instance.NoCommissionItemIds ?? new ushort[0]);
+            if (Configuration.Instance.QuestCheckEnabled)
+            {
+                try { _activeQuests = Database.LoadActiveQuests(); }
+                catch (Exception ex) { Logger.LogException(ex, "[SellVault] initial LoadActiveQuests"); }
+            }
 
             U.Events.OnPlayerConnected += OnConnected;
             U.Events.OnPlayerDisconnected += OnDisconnected;
@@ -56,6 +64,17 @@ namespace SellVault
 
             Logger.Log("SellVault loaded. Market=" + _prices.Count + " items, SellBoxes=" + _boxKeys.Count +
                        ", Commission=" + Configuration.Instance.BaseCommissionPercent + "%.");
+
+            float refresh = Configuration.Instance.PriceRefreshIntervalSeconds;
+            if (refresh > 0f)
+            {
+                _nextPriceRefreshAt = Time.realtimeSinceStartup + refresh;
+                Logger.Log("[SellVault] Price auto-refresh every " + refresh.ToString("0.##") + "s.");
+            }
+            else
+            {
+                Logger.Log("[SellVault] Price auto-refresh disabled (use /sellreload to refresh).");
+            }
         }
 
         protected override void Unload()
@@ -107,6 +126,39 @@ namespace SellVault
                 if (a == null) break;
                 try { a(); } catch (Exception ex) { Logger.LogException(ex, "[SellVault] main action"); }
             }
+
+            TickPriceRefresh();
+        }
+
+        private void TickPriceRefresh()
+        {
+            float interval = Configuration?.Instance?.PriceRefreshIntervalSeconds ?? 0f;
+            if (interval <= 0f) return;
+            float now = Time.realtimeSinceStartup;
+            if (now < _nextPriceRefreshAt) return;
+            _nextPriceRefreshAt = now + interval;
+
+            if (Interlocked.CompareExchange(ref _priceRefreshInFlight, 1, 0) != 0) return;
+            bool questCheck = Configuration?.Instance?.QuestCheckEnabled ?? false;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    SellDatabase db = Database;
+                    if (db == null) return;
+                    Dictionary<ushort, double> prices = db.LoadMarketPrices();
+                    List<QuestDef> quests = questCheck ? db.LoadActiveQuests() : new List<QuestDef>();
+                    Enqueue(() => { _prices = prices; _activeQuests = quests; });
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogException(ex, "[SellVault] auto price refresh");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _priceRefreshInFlight, 0);
+                }
+            });
         }
 
         // ---- sell boxes ----
@@ -409,6 +461,8 @@ namespace SellVault
             {
                 Say(player, cfg.MsgSold, total, sold);
                 long credit = total;
+                bool questCheck = cfg.QuestCheckEnabled;
+                List<QuestDef> quests = questCheck ? _activeQuests : null;
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
                     SellDatabase db = Database;
@@ -418,6 +472,15 @@ namespace SellVault
                     {
                         db.AddStock(e.Id, e.Amount);
                         db.LogSale(steamId, e.Id, e.Amount, e.Coins);
+                        if (!questCheck || quests == null || quests.Count == 0) continue;
+                        List<QuestCompletion> done = db.RecordSaleForQuests(steamId, e.Id, e.Amount, quests);
+                        if (done == null || done.Count == 0) continue;
+                        foreach (QuestCompletion qc in done)
+                        {
+                            db.AddCoins(steamId, qc.RewardCoins);
+                            db.LogActivity(steamId, "quest", qc.RewardCoins);
+                            NotifyQuestComplete(steamId, qc);
+                        }
                     }
                 });
             }
@@ -542,6 +605,23 @@ namespace SellVault
             string text = msg.Text.Replace("{coins}", coins.ToString()).Replace("{count}", count.ToString());
             Color color = UnturnedChat.GetColorFromName(msg.Color, Color.white);
             ChatManager.serverSendMessage(text, color, null, player.channel.owner, EChatMode.SAY, null, true);
+        }
+
+        private void NotifyQuestComplete(ulong steamId, QuestCompletion qc)
+        {
+            Message msg = Configuration?.Instance?.MessageQuestComplete;
+            if (msg == null || string.IsNullOrEmpty(msg.Text)) return;
+            string text = msg.Text
+                .Replace("{name}", qc.Name ?? "")
+                .Replace("{reward_coins}", qc.RewardCoins.ToString());
+            string colorName = msg.Color;
+            Enqueue(() =>
+            {
+                Player p = PlayerTool.getPlayer(new CSteamID(steamId));
+                if (p == null) return;
+                Color color = UnturnedChat.GetColorFromName(colorName, Color.green);
+                ChatManager.serverSendMessage(text, color, null, p.channel.owner, EChatMode.SAY, null, true);
+            });
         }
     }
 }
