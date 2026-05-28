@@ -38,3 +38,8 @@ BILL_ITEM_IDS = tuple(int(x) for x in os.getenv("BILL_ITEM_IDS", "4254,4255,4256
 
 # Web shop URL — shown in welcome embed, commands embed, and as a clickable link button.
 WEB_SHOP_URL = os.getenv("WEB_SHOP_URL", "https://unturned-shop-39c75.web.app")
+
+# Periodic Discord-username backfill: how often the bot sweeps sv_links rows whose
+# discord_username is NULL and fills them via the Discord HTTP API. 0 disables the loop
+# (CLI `python -m backfill_usernames` still works).
+USERNAME_BACKFILL_INTERVAL_MIN = _int("USERNAME_BACKFILL_INTERVAL_MIN", 30)

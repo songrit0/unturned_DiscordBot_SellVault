@@ -79,6 +79,14 @@ def ensure_schema():
     with _conn() as c, c.cursor() as cur:
         for s in stmts:
             cur.execute(s)
+        # Fail fast if the api migration that added discord_username / discord_global_name /
+        # discord_username_updated_at has not been deployed. The bot assumes those columns
+        # exist when running the backfill loop and CLI; better to halt on boot than to crash
+        # mid-tick.
+        cur.execute(
+            f"SELECT `discord_username`, `discord_global_name`, `discord_username_updated_at` "
+            f"FROM `{SV}links` LIMIT 0;"
+        )
 
 
 # ---------- linking ----------
@@ -102,6 +110,32 @@ def get_steam_by_discord(discord_id: int):
         cur.execute(f"SELECT steam_id FROM `{SV}links` WHERE discord_id=%s LIMIT 1;", (discord_id,))
         row = cur.fetchone()
         return int(row["steam_id"]) if row else None
+
+
+def count_links_missing_username() -> int:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) AS n FROM `{SV}links` WHERE `discord_username` IS NULL;")
+        row = cur.fetchone()
+        return int(row["n"]) if row else 0
+
+
+def select_link_ids_missing_username(limit: int):
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT `discord_id` FROM `{SV}links` "
+            f"WHERE `discord_username` IS NULL ORDER BY `discord_id` LIMIT %s;",
+            (int(limit),),
+        )
+        return [int(r["discord_id"]) for r in cur.fetchall()]
+
+
+def update_link_username(discord_id: int, username, global_name):
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"UPDATE `{SV}links` SET `discord_username`=%s, `discord_global_name`=%s, "
+            f"`discord_username_updated_at`=NOW() WHERE `discord_id`=%s;",
+            (username, global_name, int(discord_id)),
+        )
 
 
 # ---------- coins ----------

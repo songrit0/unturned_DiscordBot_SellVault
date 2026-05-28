@@ -14,9 +14,10 @@ import re
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.webhook.async_ import Webhook
 
+import backfill_usernames
 import config
 import db
 
@@ -1184,6 +1185,22 @@ async def setup(interaction: discord.Interaction):
 
 # ---------------- lifecycle ----------------
 
+@tasks.loop(minutes=max(config.USERNAME_BACKFILL_INTERVAL_MIN, 1))
+async def _username_backfill_tick():
+    try:
+        await backfill_usernames.run_once(
+            token=config.DISCORD_TOKEN,
+            limit=backfill_usernames.PER_TICK_LIMIT,
+        )
+    except Exception:
+        log.exception("username backfill tick failed")
+
+
+@_username_backfill_tick.before_loop
+async def _username_backfill_wait_ready():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def setup_hook():
     await asyncio.to_thread(db.ensure_schema)
@@ -1202,6 +1219,10 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
+    if config.USERNAME_BACKFILL_INTERVAL_MIN > 0 and not _username_backfill_tick.is_running():
+        _username_backfill_tick.start()
+        log.info("username backfill loop started (every %d min)",
+                 config.USERNAME_BACKFILL_INTERVAL_MIN)
 
 
 if __name__ == "__main__":
