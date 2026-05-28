@@ -150,7 +150,13 @@ async def run_once(token: str, limit: int, dry_run: bool = False,
 
 
 async def _run_until_drained(token: str, dry_run: bool, batch: int) -> BackfillStats:
-    """CLI helper: keep calling run_once until no rows remain."""
+    """
+    CLI helper: keep calling run_once until no rows remain.
+
+    Dry-run never UPDATEs, so the same NULL rows would be re-selected forever.
+    Bail out after the first pass in that case. Same exit applies if no progress
+    was made (e.g. every row hit a persistent 429 / error) — avoids tight loops.
+    """
     total = BackfillStats()
     while True:
         stats = await run_once(token, limit=batch, dry_run=dry_run)
@@ -159,7 +165,7 @@ async def _run_until_drained(token: str, dry_run: bool, batch: int) -> BackfillS
         total.deleted += stats.deleted
         total.rate_limited_hits += stats.rate_limited_hits
         total.errors += stats.errors
-        if stats.examined == 0:
+        if stats.examined == 0 or dry_run or (stats.updated + stats.deleted) == 0:
             break
     return total
 
