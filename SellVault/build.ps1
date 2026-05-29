@@ -23,7 +23,8 @@ $refs = @(
     "$managed\com.rlabrecque.steamworks.net.dll", "$managed\netstandard.dll",
     "$rocket\Rocket.API.dll", "$rocket\Rocket.Core.dll", "$rocket\Rocket.Unturned.dll",
     "$proj\libs\MySql.Data.dll",
-    "$fx\System.dll", "$fx\System.Core.dll", "$fx\System.Xml.dll", "$fx\System.Data.dll"
+    "$fx\System.dll", "$fx\System.Core.dll", "$fx\System.Xml.dll", "$fx\System.Data.dll",
+    "$fx\System.Net.Http.dll"
 )
 New-Item -ItemType Directory -Force "$proj\bin" | Out-Null
 $srcs = Get-ChildItem $proj -Recurse -Filter *.cs | Select-Object -ExpandProperty FullName

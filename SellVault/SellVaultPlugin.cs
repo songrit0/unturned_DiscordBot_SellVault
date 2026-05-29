@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
+using System.Text;
 using System.Threading;
 using Rocket.Core.Logging;
 using Rocket.Core.Plugins;
@@ -39,6 +41,9 @@ namespace SellVault
         private float _nextPriceRefreshAt;
         private int _priceRefreshInFlight;
         private List<QuestDef> _activeQuests = new List<QuestDef>();
+
+        // single reusable client for the shop API (socket reuse; one instance is the documented pattern)
+        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
         private struct SaleEntry { public ushort Id; public int Amount; public long Coins; }
 
@@ -580,6 +585,86 @@ namespace SellVault
             });
         }
 
+        // ---- web shop / PIN ----
+
+        /// <summary>
+        /// <c>/shop</c> - shows the player their personal web login link plus a /shoppin hint.
+        /// Pure string + chat; no DB or network, so it runs synchronously on the game thread.
+        /// Works for unlinked players (the link only needs their SteamID).
+        /// </summary>
+        public void ShowShopLink(UnturnedPlayer up)
+        {
+            Player player = up.Player;
+            if (player == null) return;
+            SellVaultConfiguration cfg = Configuration.Instance;
+
+            string baseUrl = cfg.WebShopLoginUrl ?? "https://meowpow.shop/login";
+            string url = baseUrl + "?id=" + up.CSteamID.m_SteamID;
+
+            SayUrl(player, cfg.MsgShopLink, url);
+            Say(player, cfg.MsgShopPinHint);
+        }
+
+        /// <summary>
+        /// <c>/shoppin &lt;pin&gt;</c> - posts the player's SteamID + 6-digit PIN to the shop API
+        /// (X-Bot-Secret header) so the PIN can be hashed server-side. The PIN must already be
+        /// validated as 6 digits by the caller. DB/network on a background thread, chat reply via
+        /// Enqueue, mirroring <see cref="LinkAccount"/>.
+        /// </summary>
+        public void SetWebPin(UnturnedPlayer up, string pin)
+        {
+            Player player = up.Player;
+            if (player == null) return;
+            ulong steamId = up.CSteamID.m_SteamID;
+            SellVaultConfiguration cfg = Configuration.Instance;
+            ApiSection api = cfg.Api;
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool ok = false;
+                try
+                {
+                    if (api == null || string.IsNullOrEmpty(api.BaseUrl))
+                    {
+                        Logger.LogWarning("[SellVault] /shoppin: Api.BaseUrl not configured.");
+                    }
+                    else
+                    {
+                        string url = api.BaseUrl.TrimEnd('/') + "/bot/steam-pin";
+                        string body = "{\"steam_id\":\"" + steamId + "\",\"pin\":\"" + pin + "\"}";
+                        using (HttpRequestMessage req = new HttpRequestMessage(HttpMethod.Post, url))
+                        {
+                            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+                            if (!string.IsNullOrEmpty(api.BotSecret))
+                                req.Headers.Add("X-Bot-Secret", api.BotSecret);
+
+                            // blocking on this background thread by design (no async path in commands)
+                            using (HttpResponseMessage resp = _http.SendAsync(req).GetAwaiter().GetResult())
+                            {
+                                ok = resp.IsSuccessStatusCode;
+                                if (!ok)
+                                    Logger.LogWarning("[SellVault] /shoppin POST returned " + (int)resp.StatusCode +
+                                                      " for steam " + steamId + ".");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogException(ex, "[SellVault] /shoppin POST failed for steam " + steamId);
+                    ok = false;
+                }
+
+                bool success = ok;
+                Enqueue(() =>
+                {
+                    Player p = PlayerTool.getPlayer(new CSteamID(steamId));
+                    if (p == null) return;
+                    Say(p, success ? cfg.MsgPinSet : cfg.MsgPinFailed);
+                });
+            });
+        }
+
         private static void GiveWelcomeItems(Player p, SellVaultConfiguration cfg)
         {
             if (cfg.WelcomePackItems == null) return;
@@ -603,6 +688,15 @@ namespace SellVault
         {
             if (player == null || msg == null || string.IsNullOrEmpty(msg.Text)) return;
             string text = msg.Text.Replace("{coins}", coins.ToString()).Replace("{count}", count.ToString());
+            Color color = UnturnedChat.GetColorFromName(msg.Color, Color.white);
+            ChatManager.serverSendMessage(text, color, null, player.channel.owner, EChatMode.SAY, null, true);
+        }
+
+        /// <summary>Like <see cref="Say"/> but substitutes the {url} placeholder (for /shop).</summary>
+        public static void SayUrl(Player player, Message msg, string url)
+        {
+            if (player == null || msg == null || string.IsNullOrEmpty(msg.Text)) return;
+            string text = msg.Text.Replace("{url}", url ?? "");
             Color color = UnturnedChat.GetColorFromName(msg.Color, Color.white);
             ChatManager.serverSendMessage(text, color, null, player.channel.owner, EChatMode.SAY, null, true);
         }

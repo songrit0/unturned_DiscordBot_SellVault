@@ -18,6 +18,14 @@ namespace SellVault
         public string TablePrefix;
     }
 
+    public sealed class ApiSection
+    {
+        /// <summary>Base URL of the shop API. MUST be HTTPS — the PIN is sent in clear over this connection.</summary>
+        public string BaseUrl;
+        /// <summary>Shared secret sent as the <c>X-Bot-Secret</c> header. Must match the API's bot guard secret.</summary>
+        public string BotSecret;
+    }
+
     public sealed class WelcomeItem
     {
         [XmlAttribute] public ushort Id;
@@ -29,6 +37,12 @@ namespace SellVault
     public sealed class SellVaultConfiguration : IRocketPluginConfiguration
     {
         public DatabaseSection Database;
+
+        /// <summary>Shop API connection used by /shoppin to set a web login PIN.</summary>
+        public ApiSection Api;
+
+        /// <summary>Base of the web shop login link shown by /shop. The player's SteamID is appended as ?id=&lt;steamid&gt;.</summary>
+        public string WebShopLoginUrl;
 
         /// <summary>Commission % taken when a player sells (payout = price x (100% - this)). Match the bot's SELL_COMMISSION.</summary>
         public double BaseCommissionPercent;
@@ -91,6 +105,13 @@ namespace SellVault
         public Message MsgError;
         public Message MsgOnlineReward;  // {coins}
 
+        // web shop / PIN messages
+        public Message MsgShopLink;      // {url} - /shop login link
+        public Message MsgShopPinHint;   // hint to set a PIN with /shoppin
+        public Message MsgPinUsage;      // shown when /shoppin arg isn't exactly 6 digits
+        public Message MsgPinSet;        // /shoppin success
+        public Message MsgPinFailed;     // /shoppin API error
+
         /// <summary>Enable quest progress tracking on sale.</summary>
         public bool QuestCheckEnabled;
         /// <summary>Chat message on quest completion. Placeholders: {name}, {reward_coins}.</summary>
@@ -103,6 +124,12 @@ namespace SellVault
                 ConnectionString = "SERVER=localhost;DATABASE=unturned;UID=root;PASSWORD=123456",
                 TablePrefix = "sv_"
             };
+            Api = new ApiSection
+            {
+                BaseUrl = "https://meowpow.shop",
+                BotSecret = "CHANGE_ME_BOT_SECRET"
+            };
+            WebShopLoginUrl = "https://meowpow.shop/login";
             BaseCommissionPercent = 40.0;
             NoCommissionItemIds = new ushort[] { 4254, 4255, 4256, 4257, 4258 };
             CoinName = "Coin";
@@ -148,6 +175,17 @@ namespace SellVault
             MsgReloaded = new Message("[SellVault] โหลด market ใหม่ {count} รายการ | reloaded {count} items", "green");
             MsgError = new Message("เกิดข้อผิดพลาด ลองใหม่ | Something went wrong", "red");
             MsgOnlineReward = new Message("⏱ ออนไลน์รับ +{coins} Coin | Playtime reward +{coins} Coin", "green");
+
+            MsgShopLink = new Message(
+                "🛒 เข้าเว็บร้านค้า: {url} | Web shop: {url}", "green");
+            MsgShopPinHint = new Message(
+                "ตั้ง PIN เข้าเว็บด้วย /shoppin <รหัส 6 หลัก> | Set a web login PIN with /shoppin <6 digits>", "yellow");
+            MsgPinUsage = new Message(
+                "ใช้: /shoppin <รหัส 6 หลัก> | Use: /shoppin <6-digit pin>", "yellow");
+            MsgPinSet = new Message(
+                "✅ ตั้ง PIN สำเร็จ! ใช้ Steam ID + PIN นี้ล็อกอินเว็บได้ | PIN set! Log in on the web with your Steam ID + this PIN", "green");
+            MsgPinFailed = new Message(
+                "ตั้ง PIN ไม่สำเร็จ ลองใหม่ภายหลัง | Failed to set PIN, try again later", "red");
 
             QuestCheckEnabled = true;
             MessageQuestComplete = new Message(

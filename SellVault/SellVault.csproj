@@ -29,6 +29,7 @@
     <Reference Include="Rocket.Unturned"><HintPath>$(RocketDir)\Rocket.Unturned.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="MySql.Data"><HintPath>libs\MySql.Data.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 
 </Project>
