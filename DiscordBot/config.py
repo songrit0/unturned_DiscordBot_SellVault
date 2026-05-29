@@ -43,3 +43,15 @@ WEB_SHOP_URL = os.getenv("WEB_SHOP_URL", "https://unturned-shop-39c75.web.app")
 # discord_username is NULL and fills them via the Discord HTTP API. 0 disables the loop
 # (CLI `python -m backfill_usernames` still works).
 USERNAME_BACKFILL_INTERVAL_MIN = _int("USERNAME_BACKFILL_INTERVAL_MIN", 30)
+
+# P2P market feed: the bot auto-announces new player listings (sv_p2p_listings) to this
+# Discord channel and attaches a Buy button. 0 disables the announce loop.
+P2P_FEED_CHANNEL_ID = _int("P2P_FEED_CHANNEL_ID")
+
+# Shop-api base URL the bot calls to execute a P2P buy (logic stays server-side). Stable
+# reserved-ngrok domain in prod. Empty disables the Buy button's API call.
+API_BASE_URL = os.getenv("API_BASE_URL", "").rstrip("/")
+
+# Shared secret sent as the X-Bot-Secret header so the api's BotGuard trusts bot calls.
+# No default — must be set in .env to match the api's BOT_API_SECRET.
+BOT_API_SECRET = os.getenv("BOT_API_SECRET", "")

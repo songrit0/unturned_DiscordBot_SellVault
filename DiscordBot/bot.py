@@ -9,9 +9,11 @@ Shares MySQL with the SellVault + RedeemCode plugins.
 Selling is done in-game (sell box) by the SellVault plugin; the bot only shows the catalog/prices.
 """
 import asyncio
+import json
 import logging
 import re
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -1122,6 +1124,7 @@ async def setup(interaction: discord.Interaction):
         shop_ch = await ensure_channel("🛒-shop")
         bills_ch = await ensure_channel("💵-bills-shop")
         market_ch = await ensure_channel("🏷️-market")
+        p2p_ch = await ensure_channel("🤝-p2p-market")
         lb = await ensure_channel("🏆-leaderboard")
         cmds_ch = await ensure_channel("📖-commands")
 
@@ -1135,6 +1138,8 @@ async def setup(interaction: discord.Interaction):
                 admin_over[role] = discord.PermissionOverwrite(view_channel=True)
         admin_ch = await ensure_channel("🛠️-admin", admin_over)
 
+        # Note: 🤝-p2p-market is the auto-feed — don't purge it (would delete live listing
+        # posts and their Buy buttons; announced_at already marks them as posted).
         for ch in (welcome, coins_ch, shop_ch, bills_ch, market_ch, lb, cmds_ch, admin_ch):
             try:
                 await ch.purge(limit=20, check=lambda m: m.author == guild.me)
@@ -1164,6 +1169,12 @@ async def setup(interaction: discord.Interaction):
             title="🏷️ รายการตลาด / Market",
             description="กดดูรายการของที่ซื้อ/ขายได้ + ราคา (ขายจริงในเกมที่กล่อง sell)", color=0xE67E22),
             view=MarketListView())
+        await p2p_ch.send(embed=discord.Embed(
+            title="🤝 ตลาดผู้เล่น / Player Market",
+            description=("ประกาศขายของผู้เล่นจะโผล่ที่นี่อัตโนมัติ — กด **ซื้อ / Buy** ใต้รายการเพื่อซื้อด้วย Coin → ได้โค้ด → /code ในเกม\n"
+                         "New player listings post here automatically — tap **Buy** under an item to purchase with Coin.\n\n"
+                         f"🌐 ลงขาย/ดูทั้งหมดบนเว็บ · List & browse on the web: {config.WEB_SHOP_URL}"),
+            color=0x1ABC9C))
         await lb.send(embed=await build_top_embed(), view=LeaderboardView())
         await cmds_ch.send(embed=build_commands_embed())
         await admin_ch.send(embed=discord.Embed(
@@ -1180,10 +1191,379 @@ async def setup(interaction: discord.Interaction):
 
     await interaction.followup.send(
         "ตั้งค่าเสร็จ ✅ " + " · ".join(
-            c.mention for c in (welcome, coins_ch, shop_ch, bills_ch, market_ch, lb, cmds_ch, admin_ch)), ephemeral=True)
+            c.mention for c in (welcome, coins_ch, shop_ch, bills_ch, market_ch, p2p_ch, lb, cmds_ch, admin_ch)),
+        ephemeral=True)
+
+
+# ---------------- notifications outbox (DM the seller) ----------------
+# The shop-api writes rows into sv_notifications (dm_status='pending') — e.g. when a
+# P2P listing expires/cancels and a redeem code is minted. Only the bot holds the
+# Discord token, so it polls the table, DMs the recipient, and marks the outcome.
+# Mirrors the username-backfill loop pattern (DB-poll + asyncio.to_thread + status as
+# the idempotency marker). The bot never creates sv_notifications; the api owns its DDL.
+
+NOTIFY_POLL_SECONDS = 20
+NOTIFY_BATCH_LIMIT = 25       # rows handled per tick
+NOTIFY_MAX_ATTEMPTS = 5       # transient-error retries before giving up (-> 'failed')
+
+
+async def dm_user(discord_id: int, embed: discord.Embed) -> str:
+    """
+    Best-effort DM to a user resolved by id. Returns:
+      'sent'   — delivered
+      'failed' — user unreachable (DMs closed, blocked, or no such user) — don't retry
+      'error'  — transient failure (network/Discord 5xx) — safe to retry later
+    """
+    try:
+        user = await bot.fetch_user(discord_id)
+    except discord.NotFound:
+        log.warning("notify: discord user %s not found", discord_id)
+        return "failed"
+    except discord.HTTPException:
+        log.exception("notify: fetch_user failed for %s", discord_id)
+        return "error"
+    try:
+        await user.send(embed=embed)
+        return "sent"
+    except discord.Forbidden:
+        # DMs disabled / bot blocked / no shared guild — permanent for this recipient.
+        log.info("notify: cannot DM %s (Forbidden)", discord_id)
+        return "failed"
+    except discord.HTTPException:
+        log.exception("notify: user.send failed for %s", discord_id)
+        return "error"
+
+
+# Per-kind bilingual copy (Thai primary + English second line), keyed by sv_notifications.kind.
+# {item_name} {qty} are substituted; %s in the desc holds the second-line break. Approved copy.
+_NOTIFY_COPY = {
+    "p2p_expired": {
+        "title": "⌛ ประกาศขายหมดเวลา · Listing expired",
+        "th": "ประกาศขาย **{item_name}** ×{qty} ของคุณหมดเวลาแล้ว — ระบบเปลี่ยนไอเทมเป็นโค้ดรับของให้",
+        "en": "Your listing for **{item_name}** ×{qty} has expired — your item is now a redeem code.",
+    },
+    "p2p_cancelled": {
+        "title": "🚫 ยกเลิกประกาศขาย · Listing cancelled",
+        "th": "คุณยกเลิกประกาศขาย **{item_name}** ×{qty} — รับไอเทมคืนผ่านโค้ดนี้",
+        "en": "You cancelled your listing for **{item_name}** ×{qty} — claim your item with this code.",
+    },
+    "p2p_force_closed": {
+        "title": "🛠️ ประกาศถูกปิดโดยแอดมิน · Listing closed by admin",
+        "th": "ประกาศขาย **{item_name}** ×{qty} ของคุณถูกปิดโดยแอดมิน — รับไอเทมคืนผ่านโค้ดนี้",
+        "en": "Your listing for **{item_name}** ×{qty} was closed by an admin — claim your item with this code.",
+    },
+}
+
+
+def _expires_value(payload: dict):
+    """Discord relative+full timestamp from code_expires_at_unix (epoch seconds);
+    fall back to the raw ISO code_expires_at string if the unix field is missing/bad."""
+    unix = payload.get("code_expires_at_unix")
+    try:
+        if unix is not None:
+            u = int(unix)
+            return f"<t:{u}:R> · <t:{u}:f>"
+    except (TypeError, ValueError):
+        pass
+    iso = payload.get("code_expires_at")
+    return str(iso) if iso else None
+
+
+def notification_embed(kind: str, payload: dict) -> discord.Embed:
+    """
+    Render an sv_notifications outbox row into a bilingual DM embed, keyed by kind.
+    payload keys (api contract, all optional so a sparse row still renders):
+      item_name, amount, image_url, code, code_expires_at (ISO),
+      code_expires_at_unix (epoch seconds).
+    """
+    item_name = payload.get("item_name") or "ไอเทม / item"
+    qty = payload.get("amount") or 1
+    code = payload.get("code")
+
+    copy = _NOTIFY_COPY.get(kind)
+    if copy:
+        title = copy["title"]
+        th = copy["th"].format(item_name=item_name, qty=qty)
+        en = copy["en"].format(item_name=item_name, qty=qty)
+        desc = f"{th}\n{en}"
+    else:
+        # Unknown kind — still deliver something useful rather than dropping the DM.
+        title = "🔔 แจ้งเตือน · Notification"
+        desc = (f"อัปเดตเกี่ยวกับ **{item_name}** ×{qty}\n"
+                f"Update on **{item_name}** ×{qty}.")
+
+    e = discord.Embed(title=title, description=desc, color=0xE67E22)
+    image_url = payload.get("image_url")
+    if isinstance(image_url, str) and image_url.startswith(("http://", "https://")):
+        e.set_thumbnail(url=image_url)
+    if code:
+        e.add_field(name="🎟️ โค้ด · Code", value=f"`{code}`", inline=False)
+        e.add_field(name="🎮 รับในเกม · Claim", value=f"`/code {code}`", inline=False)
+    expires = _expires_value(payload)
+    if expires:
+        e.add_field(name="⏳ หมดอายุ · Expires", value=expires, inline=False)
+    e.set_footer(text="⚠️ ใช้ก่อนหมดอายุ ไม่งั้นไอเทมจะหายถาวร · Redeem before it expires or the item is lost.")
+    return e
+
+
+async def _process_notification(row: dict):
+    nid = int(row["id"])
+    discord_id = row.get("discord_id")
+    if not discord_id:
+        steam_id = row.get("steam_id")
+        if steam_id is not None:
+            discord_id = await asyncio.to_thread(db.get_discord_by_steam, int(steam_id))
+    if not discord_id:
+        # No way to reach a Discord user — don't keep retrying forever.
+        log.warning("notify: row %s has no resolvable discord_id; marking failed", nid)
+        await asyncio.to_thread(db.mark_notification, nid, "failed")
+        return
+
+    raw = row.get("payload")
+    try:
+        payload = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else (raw or {})
+        if not isinstance(payload, dict):
+            payload = {}
+    except (ValueError, TypeError):
+        log.warning("notify: row %s has unparseable payload", nid)
+        payload = {}
+
+    embed = notification_embed(row.get("kind") or "", payload)
+    result = await dm_user(int(discord_id), embed)
+    if result == "sent":
+        await asyncio.to_thread(db.mark_notification, nid, "sent")
+    elif result == "failed":
+        await asyncio.to_thread(db.mark_notification, nid, "failed")
+    else:  # 'error' — transient. Retry until the attempt cap, then give up.
+        next_attempts = int(row.get("dm_attempts") or 0) + 1
+        status = "failed" if next_attempts >= NOTIFY_MAX_ATTEMPTS else "pending"
+        await asyncio.to_thread(db.mark_notification, nid, status)
+
+
+# ---------------- p2p market feed (auto-announce + Buy button) ----------------
+# The bot polls sv_p2p_listings for new active listings (announced_at IS NULL), posts an
+# embed + Buy button to the P2P feed channel, then stamps announced_at so it posts once.
+# The Buy button calls the shop-api (logic stays server-side); the bot only resolves the
+# buyer's steam_id and relays the API result. Buy buttons are persistent via DynamicItem
+# (the listing id lives in the custom_id), so they survive bot restarts.
+
+P2P_FEED_POLL_SECONDS = 25
+P2P_FEED_BATCH_LIMIT = 10     # listings posted per tick (rate-friendly)
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
+
+
+def p2p_listing_embed(row: dict) -> discord.Embed:
+    name = row.get("name") or f"item {row.get('item_id')}"
+    amount = int(row.get("amount") or 1)
+    price = int(round(float(row.get("price") or 0)))
+    quality = row.get("quality")
+    seller_discord = row.get("seller_discord")
+    seller = f"<@{int(seller_discord)}>" if seller_discord else "ผู้เล่น / a player"
+
+    e = discord.Embed(title=f"🤝 {name}", color=0x1ABC9C)
+    e.add_field(name="จำนวน · Amount", value=f"×{amount}", inline=True)
+    e.add_field(name="ราคา · Price", value=f"{price} {config.COIN_NAME}", inline=True)
+    if quality is not None:
+        e.add_field(name="สภาพ · Quality", value=f"{int(quality)}%", inline=True)
+    e.add_field(name="ผู้ขาย · Seller", value=seller, inline=False)
+    image_url = row.get("image_url")
+    if isinstance(image_url, str) and image_url.startswith(("http://", "https://")):
+        e.set_thumbnail(url=image_url)
+    e.set_footer(text=f"listing #{row.get('id')} · กดซื้อด้านล่าง / tap Buy below")
+    return e
+
+
+async def _execute_p2p_buy(listing_id: int, discord_id: int):
+    """
+    POST the buy to the shop-api (which owns the purchase + buy+claim code-mint).
+    Returns (kind, payload):
+      ('ok', data)            — 200/201; data = {redeem_code, item_name, amount, price}
+      ('unconfigured', None)  — API_BASE_URL / BOT_API_SECRET missing
+      ('http', (status, msg)) — error; msg is the Nest `message` token (or "")
+      ('error', None)         — network/transport failure
+    """
+    if not config.API_BASE_URL or not config.BOT_API_SECRET:
+        return ("unconfigured", None)
+    url = f"{config.API_BASE_URL}/bot/p2p/listings/{int(listing_id)}/buy"
+    headers = {"X-Bot-Secret": config.BOT_API_SECRET, "Content-Type": "application/json"}
+    body = {"discord_id": str(discord_id)}
+    try:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.post(url, headers=headers, json=body) as resp:
+                if resp.status in (200, 201):
+                    return ("ok", await resp.json())
+                # Nest error body: { statusCode, message, error }. message may be a
+                # string token or a list (validation); normalise to a single token.
+                token = ""
+                try:
+                    data = await resp.json()
+                    msg = data.get("message")
+                    token = msg[0] if isinstance(msg, list) and msg else (msg or "")
+                except Exception:
+                    pass
+                return ("http", (resp.status, str(token)))
+    except Exception:
+        log.exception("p2p buy call failed for listing %s", listing_id)
+        return ("error", None)
+
+
+# Bilingual messages keyed by the api's documented Nest `message` token.
+_P2P_BUY_TOKEN_MSG = {
+    "discord_not_linked": ("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน · "
+                           "Link your account first (tap the Welcome Pack button)."),
+    "cannot_buy_own_listing": "ซื้อ listing ของตัวเองไม่ได้ · You can't buy your own listing.",
+    "insufficient_funds": "เหรียญไม่พอ · Not enough coins.",
+    "Listing not found": "ไม่พบรายการนี้ · Listing not found.",
+    "listing_no_longer_active": "ขายไปแล้ว/ปิดแล้ว · Already sold or closed.",
+}
+_P2P_BUY_AUTH_TOKENS = ("bot_auth_failed", "bot_auth_unavailable")
+_P2P_BUY_GENERIC = "ซื้อไม่สำเร็จ ลองใหม่ · Purchase failed, try again."
+_P2P_BUY_UNAVAILABLE = "ระบบซื้อยังไม่พร้อม · Purchase service unavailable."
+
+
+async def _handle_p2p_buy_click(interaction: discord.Interaction, listing_id: int):
+    await interaction.response.defer(ephemeral=True)
+    # Pre-check links to short-circuit before the round-trip; the api's
+    # discord_not_linked is the backstop.
+    steam = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
+    if steam is None:
+        await interaction.followup.send(_P2P_BUY_TOKEN_MSG["discord_not_linked"], ephemeral=True)
+        return
+
+    kind, payload = await _execute_p2p_buy(listing_id, interaction.user.id)
+    if kind == "ok":
+        data = payload or {}
+        name = data.get("item_name") or "item"
+        amount = data.get("amount") or 1
+        code = data.get("redeem_code")
+        if code:
+            await interaction.followup.send(
+                f"ซื้อสำเร็จ! · Purchased **{name}** ×{amount}\n"
+                f"เข้าเกมพิมพ์ · In-game type:\n```/code {code}```",
+                ephemeral=True)
+        else:
+            # Rare: coins moved but the code wasn't returned. Don't imply failure —
+            # point them to the web /codes to claim.
+            await interaction.followup.send(
+                f"ซื้อสำเร็จ **{name}** ×{amount} · Purchase went through.\n"
+                f"แต่โค้ดยังไม่ขึ้น — เช็ค/รับโค้ดที่เว็บ · No code shown yet; claim it at "
+                f"{config.WEB_SHOP_URL}/codes",
+                ephemeral=True)
+        return
+
+    if kind == "unconfigured":
+        log.error("p2p buy: API_BASE_URL/BOT_API_SECRET not configured")
+        await interaction.followup.send(_P2P_BUY_UNAVAILABLE, ephemeral=True)
+        return
+    if kind == "error":
+        await interaction.followup.send(
+            "เกิดข้อผิดพลาดในการเชื่อมต่อ ลองใหม่ · Connection error, try again.", ephemeral=True)
+        return
+
+    # kind == "http": switch on the message token, fall back to status/generic.
+    status, token = payload
+    if token in _P2P_BUY_AUTH_TOKENS:
+        log.error("p2p buy: bot auth problem (status=%s token=%s)", status, token)
+        await interaction.followup.send(_P2P_BUY_UNAVAILABLE, ephemeral=True)
+        return
+    await interaction.followup.send(_P2P_BUY_TOKEN_MSG.get(token, _P2P_BUY_GENERIC), ephemeral=True)
+
+
+class P2PBuyButton(discord.ui.DynamicItem[discord.ui.Button],
+                   template=r"p2p_buy:(?P<id>[0-9]+)"):
+    """Persistent Buy button whose listing id is encoded in the custom_id, so it keeps
+    working after a restart without re-registering per-message views."""
+    def __init__(self, listing_id: int):
+        self.listing_id = listing_id
+        super().__init__(
+            discord.ui.Button(
+                label="🛒 ซื้อ / Buy",
+                style=discord.ButtonStyle.success,
+                custom_id=f"p2p_buy:{listing_id}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(int(match["id"]))
+
+    async def callback(self, interaction: discord.Interaction):
+        await _handle_p2p_buy_click(interaction, self.listing_id)
+
+
+def p2p_buy_view(listing_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(P2PBuyButton(listing_id))
+    return view
+
+
+async def _announce_listing(channel, row: dict) -> bool:
+    """Post one listing to the feed; stamp announced_at only on success. Returns True if
+    posted (so the loop can pace itself). Leaves announced_at NULL on failure to retry."""
+    lid = int(row["id"])
+    try:
+        await channel.send(embed=p2p_listing_embed(row), view=p2p_buy_view(lid))
+    except Exception:
+        log.exception("p2p feed: failed to post listing %s", lid)
+        return False
+    await asyncio.to_thread(db.mark_listing_announced, lid)
+    return True
+
+
+async def _resolve_feed_channel():
+    cid = config.P2P_FEED_CHANNEL_ID
+    if not cid:
+        return None
+    ch = bot.get_channel(cid)
+    if ch is None:
+        try:
+            ch = await bot.fetch_channel(cid)
+        except Exception:
+            log.warning("p2p feed: channel %s not reachable", cid)
+            return None
+    return ch
 
 
 # ---------------- lifecycle ----------------
+
+@tasks.loop(seconds=P2P_FEED_POLL_SECONDS)
+async def _p2p_feed_tick():
+    if not config.P2P_FEED_CHANNEL_ID:
+        return
+    try:
+        rows = await asyncio.to_thread(db.fetch_unannounced_listings, P2P_FEED_BATCH_LIMIT)
+        if not rows:
+            return
+        channel = await _resolve_feed_channel()
+        if channel is None:
+            return
+        for row in rows:
+            await _announce_listing(channel, row)
+    except Exception:
+        log.exception("p2p feed tick failed")
+
+
+@_p2p_feed_tick.before_loop
+async def _p2p_feed_wait_ready():
+    await bot.wait_until_ready()
+
+
+
+
+@tasks.loop(seconds=NOTIFY_POLL_SECONDS)
+async def _notification_tick():
+    try:
+        rows = await asyncio.to_thread(db.fetch_pending_notifications, NOTIFY_BATCH_LIMIT)
+        for row in rows:
+            await _process_notification(row)
+    except Exception:
+        log.exception("notification tick failed")
+
+
+@_notification_tick.before_loop
+async def _notification_wait_ready():
+    await bot.wait_until_ready()
+
 
 @tasks.loop(minutes=max(config.USERNAME_BACKFILL_INTERVAL_MIN, 1))
 async def _username_backfill_tick():
@@ -1207,6 +1587,9 @@ async def setup_hook():
     for v in (LinkView(), BalanceView(), MarketListView(), ShopPanelView(),
               BillsShopPanelView(), LeaderboardView(), AdminPanelView()):
         bot.add_view(v)
+    # Persistent P2P Buy buttons: the listing id is carried in the custom_id, so a single
+    # dynamic-item registration keeps every posted Buy button working across restarts.
+    bot.add_dynamic_items(P2PBuyButton)
     if config.GUILD_ID:
         guild = discord.Object(id=config.GUILD_ID)
         bot.tree.copy_global_to(guild=guild)
@@ -1223,6 +1606,13 @@ async def on_ready():
         _username_backfill_tick.start()
         log.info("username backfill loop started (every %d min)",
                  config.USERNAME_BACKFILL_INTERVAL_MIN)
+    if not _notification_tick.is_running():
+        _notification_tick.start()
+        log.info("notification loop started (every %d s)", NOTIFY_POLL_SECONDS)
+    if config.P2P_FEED_CHANNEL_ID and not _p2p_feed_tick.is_running():
+        _p2p_feed_tick.start()
+        log.info("p2p feed loop started (every %d s -> channel %d)",
+                 P2P_FEED_POLL_SECONDS, config.P2P_FEED_CHANNEL_ID)
 
 
 if __name__ == "__main__":

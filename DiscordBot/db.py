@@ -112,6 +112,13 @@ def get_steam_by_discord(discord_id: int):
         return int(row["steam_id"]) if row else None
 
 
+def get_discord_by_steam(steam_id: int):
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"SELECT discord_id FROM `{SV}links` WHERE steam_id=%s LIMIT 1;", (steam_id,))
+        row = cur.fetchone()
+        return int(row["discord_id"]) if row else None
+
+
 def count_links_missing_username() -> int:
     with _conn() as c, c.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) AS n FROM `{SV}links` WHERE `discord_username` IS NULL;")
@@ -824,3 +831,62 @@ def transfer_coins(from_discord: int, to_discord: int, amount: int):
         conn.rollback(); raise
     finally:
         conn.close()
+
+
+# ---------- notifications outbox (sv_notifications — DDL owned by shop-api) ----------
+# The api writes rows (dm_status='pending'); the bot's poll loop reads pending rows,
+# DMs the recipient, then marks dm_status. The bot only SELECTs and UPDATEs dm_* —
+# it never creates this table (like sv_items / sv_quests, the DDL lives in shop-api).
+
+def fetch_pending_notifications(limit: int):
+    """Oldest-first batch of undelivered notifications. payload is raw JSON text;
+    the caller parses it. Returns [] when nothing is pending."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT id, discord_id, steam_id, kind, payload, dm_attempts "
+            f"FROM `{SV}notifications` WHERE dm_status='pending' "
+            f"ORDER BY id ASC LIMIT %s;",
+            (int(limit),))
+        return cur.fetchall()
+
+
+def mark_notification(notification_id: int, status: str):
+    """Record a delivery attempt outcome. Always bumps dm_attempts; sets dm_sent_at
+    only on success. status is one of 'pending' (retry later) / 'sent' / 'failed'."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"UPDATE `{SV}notifications` SET dm_status=%s, dm_attempts=dm_attempts+1, "
+            f"dm_sent_at=CASE WHEN %s='sent' THEN NOW() ELSE dm_sent_at END "
+            f"WHERE id=%s;",
+            (status, status, int(notification_id)))
+
+
+# ---------- p2p listings feed (sv_p2p_listings — DDL owned by shop-api) ----------
+# The bot auto-announces new player listings to a Discord channel. It only SELECTs
+# listing rows and UPDATEs announced_at (the watermark added by api migration 007);
+# it never creates sv_p2p_listings nor mutates listing state (buy goes through the api).
+# Column names below follow the agreed contract — confirm against the api's 007 DDL.
+
+def fetch_unannounced_listings(limit: int):
+    """Active listings not yet posted to the feed, oldest first. JOINs sv_items for the
+    item name/image and sv_links for the seller's discord handle. Returns [] when none."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT p.id, p.item_id, p.amount, p.price, p.quality, p.seller_steam, "
+            f"i.name, i.image_url, li.discord_id AS seller_discord "
+            f"FROM `{SV}p2p_listings` p "
+            f"LEFT JOIN `{SV}items` i ON i.id = p.item_id "
+            f"LEFT JOIN `{SV}links` li ON li.steam_id = p.seller_steam "
+            f"WHERE p.status='active' AND p.announced_at IS NULL "
+            f"ORDER BY p.id ASC LIMIT %s;",
+            (int(limit),))
+        return cur.fetchall()
+
+
+def mark_listing_announced(listing_id: int):
+    """Stamp announced_at so the feed loop never re-posts this listing (the watermark).
+    Called only after a successful channel post."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"UPDATE `{SV}p2p_listings` SET announced_at=NOW() WHERE id=%s;",
+            (int(listing_id),))
