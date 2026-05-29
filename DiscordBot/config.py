@@ -37,7 +37,7 @@ SELL_COMMISSION = float(os.getenv("SELL_COMMISSION", "40"))
 BILL_ITEM_IDS = tuple(int(x) for x in os.getenv("BILL_ITEM_IDS", "4254,4255,4256,4257,4258").split(",") if x.strip())
 
 # Web shop URL — shown in welcome embed, commands embed, and as a clickable link button.
-WEB_SHOP_URL = os.getenv("WEB_SHOP_URL", "https://unturned-shop-39c75.web.app")
+WEB_SHOP_URL = os.getenv("WEB_SHOP_URL", "https://meowpow.shop")
 
 # Periodic Discord-username backfill: how often the bot sweeps sv_links rows whose
 # discord_username is NULL and fills them via the Discord HTTP API. 0 disables the loop
