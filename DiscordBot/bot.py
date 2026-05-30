@@ -1590,6 +1590,9 @@ async def setup_hook():
     # Persistent P2P Buy buttons: the listing id is carried in the custom_id, so a single
     # dynamic-item registration keeps every posted Buy button working across restarts.
     bot.add_dynamic_items(P2PBuyButton)
+    # VIP shop (buy VIP with coins; sv_vip_* tables shared with the VIP plugin)
+    from vip_cog import VipCog
+    await bot.add_cog(VipCog(bot))
     if config.GUILD_ID:
         guild = discord.Object(id=config.GUILD_ID)
         bot.tree.copy_global_to(guild=guild)
