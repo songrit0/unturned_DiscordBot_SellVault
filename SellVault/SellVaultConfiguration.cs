@@ -44,6 +44,9 @@ namespace SellVault
         /// <summary>Base of the web shop login link shown by /shop. The player's SteamID is appended as ?id=&lt;steamid&gt;.</summary>
         public string WebShopLoginUrl;
 
+        /// <summary>Discord invite URL shown by /discord (static, no SteamID).</summary>
+        public string DiscordUrl;
+
         /// <summary>Commission % taken when a player sells (payout = price x (100% - this)). Match the bot's SELL_COMMISSION.</summary>
         public double BaseCommissionPercent;
 
@@ -108,6 +111,9 @@ namespace SellVault
         // web shop / PIN messages
         public Message MsgShopLink;      // {url} - /shop login link
         public Message MsgShopPinHint;   // hint to set a PIN with /shoppin
+        public Message MsgShopBrowserPrompt; // confirm-dialog text for the client browser request (only .Text is used)
+        public Message MsgDiscordLink;       // {url} - /discord invite, chat fallback
+        public Message MsgDiscordPrompt;     // confirm-dialog text for the /discord browser request (only .Text is used)
         public Message MsgPinUsage;      // shown when /shoppin arg isn't exactly 6 digits
         public Message MsgPinSet;        // /shoppin success
         public Message MsgPinFailed;     // /shoppin API error
@@ -126,10 +132,13 @@ namespace SellVault
             };
             Api = new ApiSection
             {
-                BaseUrl = "https://meowpow.shop",
+                // The API's reserved ngrok domain (NOT the web/Firebase host meowpow.shop —
+                // that would SPA-rewrite POSTs to 200 + index.html and fake a success).
+                BaseUrl = "https://gramophonic-robbie-sustainingly.ngrok-free.dev",
                 BotSecret = "CHANGE_ME_BOT_SECRET"
             };
             WebShopLoginUrl = "https://meowpow.shop/login";
+            DiscordUrl = "https://discord.gg/45c4XChMWN";
             BaseCommissionPercent = 40.0;
             NoCommissionItemIds = new ushort[] { 4254, 4255, 4256, 4257, 4258 };
             CoinName = "Coin";
@@ -180,6 +189,12 @@ namespace SellVault
                 "🛒 เข้าเว็บร้านค้า: {url} | Web shop: {url}", "green");
             MsgShopPinHint = new Message(
                 "ตั้ง PIN เข้าเว็บด้วย /shoppin <รหัส 6 หลัก> | Set a web login PIN with /shoppin <6 digits>", "yellow");
+            MsgShopBrowserPrompt = new Message(
+                "เปิดหน้าเว็บร้านค้า? | Open the web shop?", "green");
+            MsgDiscordLink = new Message(
+                "💬 ดิสคอร์ดเซิร์ฟเวอร์: {url} | Discord: {url}", "green");
+            MsgDiscordPrompt = new Message(
+                "เข้าดิสคอร์ดเซิร์ฟเวอร์? | Join our Discord?", "green");
             MsgPinUsage = new Message(
                 "ใช้: /shoppin <รหัส 6 หลัก> | Use: /shoppin <6-digit pin>", "yellow");
             MsgPinSet = new Message(

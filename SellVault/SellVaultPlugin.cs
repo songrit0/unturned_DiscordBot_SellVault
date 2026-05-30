@@ -601,8 +601,44 @@ namespace SellVault
             string baseUrl = cfg.WebShopLoginUrl ?? "https://meowpow.shop/login";
             string url = baseUrl + "?id=" + up.CSteamID.m_SteamID;
 
+            // Ask the client to open the link (Steam-overlay browser, with a confirm prompt).
+            // This is the same vanilla server->client RPC RichMessageAnnouncer uses; no asset needed.
+            // Fall back to a hard-coded bilingual prompt if the config field isn't in the live XML.
+            string prompt = (cfg.MsgShopBrowserPrompt != null && !string.IsNullOrEmpty(cfg.MsgShopBrowserPrompt.Text))
+                ? cfg.MsgShopBrowserPrompt.Text
+                : "เปิดหน้าเว็บร้านค้า? | Open the web shop?";
+            try { player.sendBrowserRequest(prompt, url); }
+            catch (Exception ex) { Logger.LogException(ex, "[SellVault] /shop sendBrowserRequest"); }
+
+            // Keep the chat link + PIN hint as a fallback (overlay disabled / prompt dismissed).
             SayUrl(player, cfg.MsgShopLink, url);
             Say(player, cfg.MsgShopPinHint);
+        }
+
+        // Hard-coded Discord invite default so /discord works without a live-config XML edit.
+        private const string DefaultDiscordUrl = "https://discord.gg/45c4XChMWN";
+
+        /// <summary>
+        /// <c>/discord</c> (alias <c>/dc</c>) - opens the server's Discord invite via the client
+        /// browser-request prompt, and chat-prints it as a fallback. Static URL (no SteamID).
+        /// Mirrors <see cref="ShowShopLink"/>. Runs on the game/main thread.
+        /// </summary>
+        public void ShowDiscordLink(UnturnedPlayer up)
+        {
+            Player player = up.Player;
+            if (player == null) return;
+            SellVaultConfiguration cfg = Configuration.Instance;
+
+            string url = string.IsNullOrEmpty(cfg.DiscordUrl) ? DefaultDiscordUrl : cfg.DiscordUrl;
+
+            string prompt = (cfg.MsgDiscordPrompt != null && !string.IsNullOrEmpty(cfg.MsgDiscordPrompt.Text))
+                ? cfg.MsgDiscordPrompt.Text
+                : "เข้าดิสคอร์ดเซิร์ฟเวอร์? | Join our Discord?";
+            try { player.sendBrowserRequest(prompt, url); }
+            catch (Exception ex) { Logger.LogException(ex, "[SellVault] /discord sendBrowserRequest"); }
+
+            // Chat fallback (overlay disabled / prompt dismissed).
+            SayUrl(player, cfg.MsgDiscordLink, url);
         }
 
         /// <summary>
@@ -637,14 +673,23 @@ namespace SellVault
                             req.Content = new StringContent(body, Encoding.UTF8, "application/json");
                             if (!string.IsNullOrEmpty(api.BotSecret))
                                 req.Headers.Add("X-Bot-Secret", api.BotSecret);
+                            // Skip ngrok's browser-warning interstitial so a stray HTML page can't
+                            // come back as a 2xx and masquerade as a successful PIN set.
+                            req.Headers.Add("ngrok-skip-browser-warning", "true");
 
                             // blocking on this background thread by design (no async path in commands)
                             using (HttpResponseMessage resp = _http.SendAsync(req).GetAwaiter().GetResult())
                             {
-                                ok = resp.IsSuccessStatusCode;
+                                // Require both a 2xx AND a JSON content type: the web/Firebase host
+                                // SPA-rewrites unknown POSTs to 200 + index.html (text/html), which
+                                // would otherwise look like success. The real API returns JSON.
+                                string mediaType = resp.Content?.Headers?.ContentType?.MediaType ?? "";
+                                bool isJson = mediaType.IndexOf("json", StringComparison.OrdinalIgnoreCase) >= 0;
+                                ok = resp.IsSuccessStatusCode && isJson;
                                 if (!ok)
-                                    Logger.LogWarning("[SellVault] /shoppin POST returned " + (int)resp.StatusCode +
-                                                      " for steam " + steamId + ".");
+                                    Logger.LogWarning("[SellVault] /shoppin POST not accepted (status="
+                                                      + (int)resp.StatusCode + ", contentType=\"" + mediaType
+                                                      + "\") for steam " + steamId + ".");
                             }
                         }
                     }
