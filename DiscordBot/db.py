@@ -51,7 +51,8 @@ def ensure_schema():
         f"""CREATE TABLE IF NOT EXISTS `{SV}market` (
             `item_id` INT UNSIGNED PRIMARY KEY, `name` VARCHAR(64) NOT NULL,
             `price` DOUBLE NOT NULL DEFAULT 0, `amount` INT NOT NULL DEFAULT 0,
-            `image_url` VARCHAR(512) NULL, `enabled` TINYINT(1) NOT NULL DEFAULT 1)
+            `image_url` VARCHAR(512) NULL, `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+            `enabled_isforsell` TINYINT(1) NOT NULL DEFAULT 1)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;""",
         f"""CREATE TABLE IF NOT EXISTS `{SV}packages` (
             `id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(64) NOT NULL,
@@ -170,27 +171,37 @@ def top_coins(limit: int = 10):
 
 # ---------- market (single list: buy single + sell in box) ----------
 
-def list_market(include_hidden: bool = False, exclude_ids=None, only_ids=None):
-    """List market items. exclude_ids/only_ids are iterables of item_ids to filter on."""
-    clauses = ["enabled=1"] if include_hidden else ["enabled=1", "amount > 0"]
+def list_market(include_hidden: bool = False, exclude_ids=None, only_ids=None, type_id=None):
+    """List market items.
+    - include_hidden=True  -> ALL rows (admin manage view; both for-sale and buy-only).
+    - include_hidden=False -> shop view: FOR-SALE items only (enabled_isforsell=1) in stock.
+    Note: `enabled` = shop buys it (sell-to-shop), `enabled_isforsell` = shop sells it (Shop).
+    exclude_ids/only_ids filter item_ids; type_id filters by sv_items.type_id."""
+    clauses = []
     params = []
+    if not include_hidden:
+        clauses.append("m.enabled_isforsell = 1")
+        clauses.append("m.amount > 0")
     if only_ids:
         ids = tuple(int(i) for i in only_ids)
         if not ids:
             return []
-        clauses.append(f"item_id IN ({','.join(['%s'] * len(ids))})")
+        clauses.append(f"m.item_id IN ({','.join(['%s'] * len(ids))})")
         params.extend(ids)
     elif exclude_ids:
         ids = tuple(int(i) for i in exclude_ids)
         if ids:
-            clauses.append(f"item_id NOT IN ({','.join(['%s'] * len(ids))})")
+            clauses.append(f"m.item_id NOT IN ({','.join(['%s'] * len(ids))})")
             params.extend(ids)
-    where = "WHERE " + " AND ".join("m." + c for c in clauses)
+    if type_id is not None:
+        clauses.append("i.type_id = %s")
+        params.append(int(type_id))
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     with _conn() as c, c.cursor() as cur:
         # name/image_url/type_id ย้ายไปอยู่ที่ sv_items (master catalog) แล้ว — JOIN เพื่อแสดง
         cur.execute(
             f"SELECT m.item_id, i.name, m.price, m.amount, i.image_url, "
-            f"i.type_id, t.name AS type_name "
+            f"i.type_id, t.name AS type_name, m.enabled, m.enabled_isforsell "
             f"FROM `{SV}market` m "
             f"LEFT JOIN `{SV}items` i ON i.id = m.item_id "
             f"LEFT JOIN `{SV}item_types` t ON t.id = i.type_id "

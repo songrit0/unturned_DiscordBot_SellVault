@@ -431,20 +431,57 @@ def market_group_embed(type_name: str, items) -> discord.Embed:
     return e
 
 
-@bot.tree.command(description="ดูรายการตลาดแบ่งตามหมวด / market grouped by type")
-async def market(interaction: discord.Interaction):
-    items = await asyncio.to_thread(db.list_market, False, config.BILL_ITEM_IDS, None)
-    if not items:
-        await interaction.response.send_message("ยังไม่มีรายการ | No items.", ephemeral=True)
-        return
+async def _send_market_groups(interaction: discord.Interaction, items):
+    """Send for-sale items grouped by type as embeds (Discord caps 10 embeds/message)."""
     groups = _group_market_by_type(items)
     embeds = [market_group_embed(name, its) for _tid, name, its in groups]
-    # Discord อนุญาตสูงสุด 10 embeds ต่อข้อความ — ถ้าหมวดเกิน 10 ใช้ followup ต่อ
     first, rest = embeds[:10], embeds[10:]
     await interaction.response.send_message(embeds=first, ephemeral=True)
     while rest:
         chunk, rest = rest[:10], rest[10:]
         await interaction.followup.send(embeds=chunk, ephemeral=True)
+
+
+class MarketTypeView(discord.ui.View):
+    """Pick an item type from the dropdown, then press Show to list its for-sale items.
+    Only items the shop SELLS (enabled_isforsell=1, in stock) are listed — buy-only items
+    are excluded here (they live on the website's 'Sell to shop' board)."""
+
+    def __init__(self, types):
+        super().__init__(timeout=180)
+        self.selected_type = None  # None = all types
+        opts = [discord.SelectOption(label="ทั้งหมด / All types", value="all", default=True)]
+        for t in (types or [])[:24]:  # Discord caps a select at 25 options
+            label = str(t.get("name") or t["id"])[:100]
+            opts.append(discord.SelectOption(label=label, value=str(t["id"])))
+        self.select = discord.ui.Select(
+            placeholder="เลือกหมวดสินค้า / Select item type",
+            min_values=1, max_values=1, options=opts, row=0)
+        self.select.callback = self._on_select
+        self.add_item(self.select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        v = self.select.values[0]
+        self.selected_type = None if v == "all" else int(v)
+        await interaction.response.defer()  # ack; keep the picker message
+
+    @discord.ui.button(label="📋 แสดง / Show", style=discord.ButtonStyle.primary, row=1)
+    async def show(self, interaction: discord.Interaction, button: discord.ui.Button):
+        items = await asyncio.to_thread(
+            db.list_market, False, config.BILL_ITEM_IDS, None, self.selected_type)
+        if not items:
+            await interaction.response.send_message(
+                "ไม่พบรายการขายในหมวดนี้ | No items for sale here.", ephemeral=True)
+            return
+        await _send_market_groups(interaction, items)
+
+
+@bot.tree.command(description="ดูรายการตลาดตามหมวด / browse market by type")
+async def market(interaction: discord.Interaction):
+    types = await asyncio.to_thread(db.list_item_types)
+    await interaction.response.send_message(
+        "เลือกหมวดสินค้าแล้วกด **แสดง** / pick a type, then press **Show**:",
+        view=MarketTypeView(types), ephemeral=True)
 
 
 @bot.tree.command(description="โอน Coin ให้ผู้เล่นอื่น / transfer coins")
