@@ -55,6 +55,11 @@ namespace SellVault
         [XmlArrayItem("Id")]
         public ushort[] NoCommissionItemIds;
 
+        /// <summary>Max coins a player may earn from SELLING per day (resets at local midnight). 0 = no limit.
+        /// All-or-nothing: if closing a sell box would push the player's daily total over this, the whole
+        /// box is rejected and every item is returned (nothing is sold).</summary>
+        public long MaxDailySellCoins;
+
         public string CoinName;
 
         /// <summary>Item id of the storage barricade used as the virtual /sell vault. Default 328 (Wood Crate).</summary>
@@ -102,6 +107,7 @@ namespace SellVault
         public Message MsgNeedOpenBox;
         public Message MsgNotInSafeZone;
         public Message MsgVaultOpenFailed;
+        public Message MsgDailyLimitReached;  // {sold} {limit} - daily sell cap hit, box returned
 
         public Message MsgBalance;       // {coins}
         public Message MsgReloaded;      // {count}
@@ -141,6 +147,7 @@ namespace SellVault
             DiscordUrl = "https://discord.gg/45c4XChMWN";
             BaseCommissionPercent = 40.0;
             NoCommissionItemIds = new ushort[] { 4254, 4255, 4256, 4257, 4258 };
+            MaxDailySellCoins = 50000;
             CoinName = "Coin";
             SellVaultStorageId = 328;
             WelcomePackCoins = 100;
@@ -179,6 +186,8 @@ namespace SellVault
                 "ใช้ /sell ได้ที่ Safe Zone เท่านั้น | /sell can only be used in a Safe Zone", "red");
             MsgVaultOpenFailed = new Message(
                 "เปิด vault ไม่สำเร็จ ลองใหม่ | Failed to open vault, try again", "red");
+            MsgDailyLimitReached = new Message(
+                "⛔ ขายเกินลิมิตวันนี้ (วันละ {limit} Coin, วันนี้ขายไป {sold}) — คืนของแล้ว | Daily sell limit reached ({limit}/day, sold {sold} today) — items returned", "red");
 
             MsgBalance = new Message("ยอด Coin: {coins} | Balance: {coins} Coin", "green");
             MsgReloaded = new Message("[SellVault] โหลด market ใหม่ {count} รายการ | reloaded {count} items", "green");

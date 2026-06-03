@@ -249,6 +249,31 @@ namespace SellVault
             catch (Exception ex) { Logger.LogException(ex, "[SellVault] LogSale failed"); }
         }
 
+        /// <summary>
+        /// Total coins this player has earned from SELLING since <paramref name="dayStart"/> (local midnight).
+        /// Used to enforce the per-day sell cap; only kind='sell' rows count (activity/quest coins excluded).
+        /// </summary>
+        public long GetTodaySellCoins(ulong steamId, DateTime dayStart)
+        {
+            try
+            {
+                using (MySqlConnection c = new MySqlConnection(_conn))
+                {
+                    c.Open();
+                    using (MySqlCommand cmd = new MySqlCommand(
+                        "SELECT COALESCE(SUM(`coins`),0) FROM `" + _log + "` "
+                        + "WHERE `steam_id`=@s AND `kind`='sell' AND `at` >= @start;", c))
+                    {
+                        cmd.Parameters.AddWithValue("@s", steamId);
+                        cmd.Parameters.AddWithValue("@start", dayStart);
+                        object o = cmd.ExecuteScalar();
+                        return o == null || o == DBNull.Value ? 0 : Convert.ToInt64(o);
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.LogException(ex, "[SellVault] GetTodaySellCoins failed"); return 0; }
+        }
+
         // ---- sell boxes ----
 
         public List<string> LoadSellBoxKeys()

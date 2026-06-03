@@ -47,6 +47,11 @@ namespace SellVault
 
         private struct SaleEntry { public ushort Id; public int Amount; public long Coins; }
 
+        // Per-player coins-sold-today tally (in-memory; seeded from market_log on connect, reset at midnight).
+        // Backs the MaxDailySellCoins cap so the limit check is instant on the main thread.
+        private sealed class DailyTally { public string Day; public long Coins; }
+        private readonly Dictionary<ulong, DailyTally> _dailySold = new Dictionary<ulong, DailyTally>();
+
         protected override void Load()
         {
             Instance = this;
@@ -65,7 +70,7 @@ namespace SellVault
             U.Events.OnPlayerDisconnected += OnDisconnected;
             Rocket.Unturned.Events.UnturnedPlayerEvents.OnPlayerUpdateStat += OnAnyPlayerStat;
             foreach (SteamPlayer sp in Provider.clients)
-                if (sp?.player != null) AttachComponent(sp.player);
+                if (sp?.player != null) { AttachComponent(sp.player); SeedDailyTally(sp.playerID.steamID.m_SteamID); }
 
             Logger.Log("SellVault loaded. Market=" + _prices.Count + " items, SellBoxes=" + _boxKeys.Count +
                        ", Commission=" + Configuration.Instance.BaseCommissionPercent + "%.");
@@ -98,12 +103,56 @@ namespace SellVault
 
         // ---- component lifecycle ----
 
-        private void OnConnected(UnturnedPlayer p) => AttachComponent(p.Player);
+        private void OnConnected(UnturnedPlayer p) { AttachComponent(p.Player); SeedDailyTally(p.CSteamID.m_SteamID); }
 
         private void OnDisconnected(UnturnedPlayer p)
         {
             SellVaultComponent c = p.Player?.gameObject.GetComponent<SellVaultComponent>();
             if (c != null) { _components.Remove(c); UnityEngine.Object.Destroy(c); }
+            _dailySold.Remove(p.CSteamID.m_SteamID);
+        }
+
+        // ---- daily sell cap ----
+
+        private static string DayKey(DateTime now) => now.ToString("yyyy-MM-dd");
+
+        /// <summary>Background-load today's sold-coin total for a player into the in-memory tally.</summary>
+        private void SeedDailyTally(ulong steamId)
+        {
+            if (Configuration.Instance.MaxDailySellCoins <= 0) return;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                SellDatabase db = Database;
+                if (db == null) return;
+                long coins = db.GetTodaySellCoins(steamId, DateTime.Today);
+                string day = DayKey(DateTime.Now);
+                Enqueue(() =>
+                {
+                    // Don't clobber a sale already tallied this session today (its log write may not be
+                    // committed yet) — keep the higher of the DB total and the in-memory total.
+                    if (_dailySold.TryGetValue(steamId, out DailyTally ex) && ex.Day == day)
+                        ex.Coins = Math.Max(ex.Coins, coins);
+                    else
+                        _dailySold[steamId] = new DailyTally { Day = day, Coins = coins };
+                });
+            });
+        }
+
+        /// <summary>Coins this player has earned from selling today (0 if not seeded / new day).</summary>
+        private long GetTallyCoins(ulong steamId)
+        {
+            return _dailySold.TryGetValue(steamId, out DailyTally t) && t.Day == DayKey(DateTime.Now) ? t.Coins : 0;
+        }
+
+        private void AddTallyCoins(ulong steamId, long delta)
+        {
+            string today = DayKey(DateTime.Now);
+            if (!_dailySold.TryGetValue(steamId, out DailyTally t) || t.Day != today)
+            {
+                t = new DailyTally { Day = today, Coins = 0 };
+                _dailySold[steamId] = t;
+            }
+            t.Coins += delta;
         }
 
         private void AttachComponent(Player player)
@@ -438,6 +487,8 @@ namespace SellVault
             long total = 0;
             int sold = 0, returned = 0;
             List<SaleEntry> log = new List<SaleEntry>();
+            List<ItemJar> marketJars = new List<ItemJar>();
+            List<ItemJar> nonMarketJars = new List<ItemJar>();
 
             foreach (ItemJar jar in new List<ItemJar>(v.items))
             {
@@ -450,17 +501,46 @@ namespace SellVault
                     long pay = _noCommissionIds.Contains(id) ? (long)Math.Floor(price * amt) : Payout(price, amt, cfg);
                     total += pay;
                     sold++;
+                    marketJars.Add(jar);
                     log.Add(new SaleEntry { Id = id, Amount = amt, Coins = pay });
                 }
                 else
                 {
-                    if (!player.inventory.tryAddItem(jar.item, true))
-                        ItemManager.dropItem(jar.item, pos, true, true, true);
-                    returned++;
+                    nonMarketJars.Add(jar);
                 }
             }
 
+            // Daily sell-coin cap (0 = disabled). All-or-nothing: if this box would push the player
+            // over the cap, sell nothing and return everything (market + non-market) untouched.
+            if (cfg.MaxDailySellCoins > 0 && sold > 0)
+            {
+                long soldToday = GetTallyCoins(steamId);
+                if (soldToday + total > cfg.MaxDailySellCoins)
+                {
+                    foreach (ItemJar jar in marketJars)
+                        if (!player.inventory.tryAddItem(jar.item, true))
+                            ItemManager.dropItem(jar.item, pos, true, true, true);
+                    foreach (ItemJar jar in nonMarketJars)
+                        if (!player.inventory.tryAddItem(jar.item, true))
+                            ItemManager.dropItem(jar.item, pos, true, true, true);
+                    v.clear();
+                    SayLimit(player, cfg.MsgDailyLimitReached, soldToday, cfg.MaxDailySellCoins);
+                    return;
+                }
+            }
+
+            // Within the cap: return non-market items, sell the rest.
+            foreach (ItemJar jar in nonMarketJars)
+            {
+                if (!player.inventory.tryAddItem(jar.item, true))
+                    ItemManager.dropItem(jar.item, pos, true, true, true);
+                returned++;
+            }
+
             v.clear();
+
+            if (sold > 0)
+                AddTallyCoins(steamId, total);
 
             if (sold > 0)
             {
@@ -743,6 +823,20 @@ namespace SellVault
             if (player == null || msg == null || string.IsNullOrEmpty(msg.Text)) return;
             string text = msg.Text.Replace("{url}", url ?? "");
             Color color = UnturnedChat.GetColorFromName(msg.Color, Color.white);
+            ChatManager.serverSendMessage(text, color, null, player.channel.owner, EChatMode.SAY, null, true);
+        }
+
+        /// <summary>Daily-cap message with {sold}/{limit} placeholders. Falls back to a built-in bilingual
+        /// string if the field isn't present in the live config XML (so older configs still inform the player).</summary>
+        private static void SayLimit(Player player, Message msg, long sold, long limit)
+        {
+            if (player == null) return;
+            string template = (msg != null && !string.IsNullOrEmpty(msg.Text))
+                ? msg.Text
+                : "⛔ ขายเกินลิมิตวันนี้ (วันละ {limit}, วันนี้ {sold}) — คืนของแล้ว | Daily sell limit reached ({limit}/day, {sold} today) — items returned";
+            string colorName = (msg != null && !string.IsNullOrEmpty(msg.Color)) ? msg.Color : "red";
+            string text = template.Replace("{sold}", sold.ToString()).Replace("{limit}", limit.ToString());
+            Color color = UnturnedChat.GetColorFromName(colorName, Color.red);
             ChatManager.serverSendMessage(text, color, null, player.channel.owner, EChatMode.SAY, null, true);
         }
 
