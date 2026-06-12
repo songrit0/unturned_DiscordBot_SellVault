@@ -55,3 +55,13 @@ API_BASE_URL = os.getenv("API_BASE_URL", "").rstrip("/")
 # Shared secret sent as the X-Bot-Secret header so the api's BotGuard trusts bot calls.
 # No default — must be set in .env to match the api's BOT_API_SECRET.
 BOT_API_SECRET = os.getenv("BOT_API_SECRET", "")
+
+# VIP role sync: the bot keeps a single Discord role in lockstep with VIP status in
+# sv_vip_grants (any active grant -> has the role; otherwise -> role removed). Operates on
+# GUILD_ID. Requires the privileged Server Members intent (portal + code), the bot to have
+# Manage Roles, and the bot's top role to sit ABOVE VIP_ROLE_ID in the role hierarchy.
+VIP_ROLE_ID = _int("VIP_ROLE_ID", 1515091339597975794)        # role given to active VIPs
+VIP_ROLE_SYNC_INTERVAL_MIN = _int("VIP_ROLE_SYNC_INTERVAL_MIN", 5)  # reconcile period
+VIP_ROLE_SYNC_ENABLED = _int("VIP_ROLE_SYNC_ENABLED", 1)      # 0 disables the loop entirely
+# When 1, the loop logs intended add/remove without touching the Discord API (validation only).
+VIP_ROLE_SYNC_DRYRUN = _int("VIP_ROLE_SYNC_DRYRUN", 0)

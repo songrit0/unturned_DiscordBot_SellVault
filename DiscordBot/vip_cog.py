@@ -79,6 +79,15 @@ class BuyButton(discord.ui.Button):
             ephemeral=True,
         )
 
+        # Instant VIP-role grant so the buyer gets the Discord role without waiting for the
+        # reconcile loop. Best-effort — failures here never affect the purchase. Imported
+        # lazily to avoid a circular import (bot imports vip_cog at startup).
+        try:
+            import bot as _bot
+            await _bot.sync_vip_role_for_member(user.id)
+        except Exception as e:  # noqa: BLE001
+            print(f"[VIP] instant role sync failed for {user.id}: {e}")
+
 
 class VipShopView(discord.ui.View):
     def __init__(self, packages: list[dict]):

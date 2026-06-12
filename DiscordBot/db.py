@@ -120,6 +120,16 @@ def get_discord_by_steam(steam_id: int):
         return int(row["discord_id"]) if row else None
 
 
+def all_links() -> list[dict]:
+    """Every steam<->discord link as {steam_id, discord_id} (both ints).
+
+    Used by the VIP role-sync loop to map active-VIP steam_ids to Discord members."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(f"SELECT steam_id, discord_id FROM `{SV}links`;")
+        return [{"steam_id": int(r["steam_id"]), "discord_id": int(r["discord_id"])}
+                for r in cur.fetchall()]
+
+
 def count_links_missing_username() -> int:
     with _conn() as c, c.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) AS n FROM `{SV}links` WHERE `discord_username` IS NULL;")

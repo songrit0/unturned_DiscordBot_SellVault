@@ -22,6 +22,7 @@ from discord.webhook.async_ import Webhook
 import backfill_usernames
 import config
 import db
+import vip_db
 
 
 # ---- auto-dismiss ephemeral messages after N seconds (no manual "Dismiss") ----
@@ -77,6 +78,10 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("unturned-bot")
 
 intents = discord.Intents.default()
+# Privileged Server Members intent — required to enumerate guild members for the VIP role
+# reconcile. MUST ALSO be toggled ON in the Discord Developer Portal (Bot > Privileged Gateway
+# Intents > Server Members Intent), otherwise guild.members is empty and the sync no-ops.
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # In-memory shopping baskets: discord_id -> {item_id: qty}. Transient (cleared on checkout).
@@ -1124,6 +1129,41 @@ async def setuplink(interaction: discord.Interaction):
     await interaction.response.send_message("วางปุ่มแล้ว ✅", ephemeral=True)
 
 
+@bot.tree.command(description="[admin] ซิงก์ Role VIP กับสถานะ VIP ตอนนี้ทันที")
+async def syncvip(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("ต้องเป็นแอดมิน", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        res = await _reconcile_vip_roles()
+    except Exception:
+        log.exception("/syncvip failed")
+        await interaction.followup.send("❌ เกิดข้อผิดพลาดระหว่างซิงก์ — ดู log", ephemeral=True)
+        return
+
+    if not res["ok"]:
+        reason = res.get("reason", "unknown")
+        msg = {
+            "no_guild_id": "❌ ยังไม่ได้ตั้ง GUILD_ID ใน .env",
+            "guild_not_found": "❌ บอทไม่อยู่ในกิลด์ตาม GUILD_ID",
+            "role_not_found": f"❌ ไม่พบ Role id `{config.VIP_ROLE_ID}` ในกิลด์",
+            "no_members": ("❌ มองไม่เห็นสมาชิก — ต้องเปิด **Server Members Intent** ใน "
+                           "Developer Portal ก่อน (ข้ามการซิงก์เพื่อกันลบ role ผิดพลาด)"),
+        }.get(reason, f"❌ ซิงก์ไม่สำเร็จ ({reason})")
+        await interaction.followup.send(msg, ephemeral=True)
+        return
+
+    tag = " _(dry-run — ไม่ได้แก้จริง)_" if res["dryrun"] else ""
+    await interaction.followup.send(
+        f"✅ ซิงก์ VIP role เสร็จ{tag}\n"
+        f"• เพิ่ม: **{res['added']}**\n"
+        f"• ลบ: **{res['removed']}**\n"
+        f"• VIP ที่ยังไม่ผูก Discord (ข้าม): **{res['skipped_unlinked_vips']}**",
+        ephemeral=True,
+    )
+
+
 @bot.tree.command(description="[admin] สร้างห้อง + แผงทั้งหมดอัตโนมัติ")
 async def setup(interaction: discord.Interaction):
     if not is_admin(interaction):
@@ -1561,6 +1601,142 @@ async def _resolve_feed_channel():
     return ch
 
 
+# ---------------- VIP role sync ----------------
+# Keep one Discord role (config.VIP_ROLE_ID) in lockstep with VIP status in sv_vip_grants:
+# any active grant -> member holds the role; otherwise -> role removed. Only ever touches this
+# one role; only acts on actual deltas (no API call when a member is already correct).
+
+VIP_SYNC_CHURN_WARN = 50  # log a warning if a single reconcile would change more members than this
+
+
+async def _compute_vip_target_discord_ids() -> set:
+    """discord_ids that SHOULD hold the VIP role = linked members whose steam has an active grant.
+    Runs the two DB reads off-thread (fresh conn per query is fine at this cadence)."""
+    vip_steam_ids = set(await asyncio.to_thread(vip_db.list_active_vip_steam_ids))
+    if not vip_steam_ids:
+        return set()
+    links = await asyncio.to_thread(db.all_links)
+    return {row["discord_id"] for row in links if row["steam_id"] in vip_steam_ids}
+
+
+async def _reconcile_vip_roles() -> dict:
+    """Full reconcile of the VIP role across the configured guild.
+
+    Returns a summary dict: {ok, reason?, added, removed, skipped_unlinked_vips,
+    no_members, dryrun}. Never raises for per-member permission issues — logs and continues.
+    """
+    summary = {"ok": False, "added": 0, "removed": 0, "skipped_unlinked_vips": 0,
+               "no_members": False, "dryrun": bool(config.VIP_ROLE_SYNC_DRYRUN)}
+
+    if not config.GUILD_ID:
+        summary["reason"] = "no_guild_id"
+        return summary
+    guild = bot.get_guild(config.GUILD_ID)
+    if guild is None:
+        summary["reason"] = "guild_not_found"
+        return summary
+    role = guild.get_role(config.VIP_ROLE_ID)
+    if role is None:
+        summary["reason"] = "role_not_found"
+        return summary
+
+    target = await _compute_vip_target_discord_ids()
+
+    members = guild.members
+    # Members intent off (or not yet populated) -> we'd see (almost) nobody and wrongly strip
+    # roles. Guard: if the guild claims more members than we can see, bail without touching roles.
+    if len(members) <= 1 and (guild.member_count or 0) > 1:
+        log.warning(
+            "vip-sync: guild.members is empty (%d visible / %d total) — Server Members intent "
+            "likely OFF in the Dev Portal; skipping reconcile to avoid stripping roles.",
+            len(members), guild.member_count or 0,
+        )
+        summary["no_members"] = True
+        summary["reason"] = "no_members"
+        return summary
+
+    # VIPs with no Discord link can't receive the role — count them for the report.
+    visible_ids = {m.id for m in members}
+    summary["skipped_unlinked_vips"] = len(target - visible_ids)
+
+    to_add, to_remove = [], []
+    for m in members:
+        has_role = role in m.roles
+        should = m.id in target
+        if should and not has_role:
+            to_add.append(m)
+        elif has_role and not should:
+            to_remove.append(m)
+        # else: already correct -> no-op, no API call
+
+    churn = len(to_add) + len(to_remove)
+    if churn > VIP_SYNC_CHURN_WARN:
+        log.warning("vip-sync: large change this tick (%d adds, %d removes > %d) — proceeding",
+                    len(to_add), len(to_remove), VIP_SYNC_CHURN_WARN)
+
+    if config.VIP_ROLE_SYNC_DRYRUN:
+        log.info("vip-sync [DRYRUN]: would +%d add, -%d remove, %d unlinked-vips skipped",
+                 len(to_add), len(to_remove), summary["skipped_unlinked_vips"])
+        summary["added"], summary["removed"], summary["ok"] = len(to_add), len(to_remove), True
+        return summary
+
+    for m in to_add:
+        try:
+            await m.add_roles(role, reason="VIP role sync: active grant")
+            summary["added"] += 1
+        except discord.Forbidden:
+            log.warning("vip-sync: Forbidden adding role to %s (%s) — check Manage Roles + "
+                        "role hierarchy (bot role must be above VIP role)", m, m.id)
+        except discord.HTTPException:
+            log.exception("vip-sync: HTTP error adding role to %s", m.id)
+
+    for m in to_remove:
+        try:
+            await m.remove_roles(role, reason="VIP role sync: no active grant")
+            summary["removed"] += 1
+        except discord.Forbidden:
+            log.warning("vip-sync: Forbidden removing role from %s (%s) — check Manage Roles + "
+                        "role hierarchy (bot role must be above VIP role)", m, m.id)
+        except discord.HTTPException:
+            log.exception("vip-sync: HTTP error removing role from %s", m.id)
+
+    summary["ok"] = True
+    log.info("vip-sync: +%d added, -%d removed, %d unlinked-vips skipped",
+             summary["added"], summary["removed"], summary["skipped_unlinked_vips"])
+    return summary
+
+
+async def sync_vip_role_for_member(discord_id: int) -> bool:
+    """Add the VIP role to ONE member immediately (used right after a VIP purchase so the role
+    lands without waiting for the loop). Best-effort; returns True if the role is now present.
+    Never raises."""
+    if config.VIP_ROLE_SYNC_DRYRUN or not config.VIP_ROLE_SYNC_ENABLED or not config.GUILD_ID:
+        return False
+    guild = bot.get_guild(config.GUILD_ID)
+    if guild is None:
+        return False
+    role = guild.get_role(config.VIP_ROLE_ID)
+    if role is None:
+        return False
+    member = guild.get_member(discord_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(discord_id)
+        except discord.HTTPException:
+            return False
+    if role in member.roles:
+        return True
+    try:
+        await member.add_roles(role, reason="VIP role sync: VIP purchased")
+        return True
+    except discord.Forbidden:
+        log.warning("vip-sync: Forbidden adding role to %s on purchase — check Manage Roles + "
+                    "hierarchy", discord_id)
+    except discord.HTTPException:
+        log.exception("vip-sync: HTTP error adding role to %s on purchase", discord_id)
+    return False
+
+
 # ---------------- lifecycle ----------------
 
 @tasks.loop(seconds=P2P_FEED_POLL_SECONDS)
@@ -1618,6 +1794,19 @@ async def _username_backfill_wait_ready():
     await bot.wait_until_ready()
 
 
+@tasks.loop(minutes=max(config.VIP_ROLE_SYNC_INTERVAL_MIN, 1))
+async def _vip_role_sync_tick():
+    try:
+        await _reconcile_vip_roles()
+    except Exception:
+        log.exception("vip role sync tick failed")
+
+
+@_vip_role_sync_tick.before_loop
+async def _vip_role_sync_wait_ready():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def setup_hook():
     await asyncio.to_thread(db.ensure_schema)
@@ -1653,6 +1842,13 @@ async def on_ready():
         _p2p_feed_tick.start()
         log.info("p2p feed loop started (every %d s -> channel %d)",
                  P2P_FEED_POLL_SECONDS, config.P2P_FEED_CHANNEL_ID)
+    if config.VIP_ROLE_SYNC_ENABLED and config.GUILD_ID and not _vip_role_sync_tick.is_running():
+        _vip_role_sync_tick.start()
+        log.info("vip role-sync loop started (every %d min -> role %d%s)",
+                 max(config.VIP_ROLE_SYNC_INTERVAL_MIN, 1), config.VIP_ROLE_ID,
+                 " [DRYRUN]" if config.VIP_ROLE_SYNC_DRYRUN else "")
+    elif config.VIP_ROLE_SYNC_ENABLED and not config.GUILD_ID:
+        log.warning("vip role-sync enabled but GUILD_ID is unset — loop not started")
 
 
 if __name__ == "__main__":

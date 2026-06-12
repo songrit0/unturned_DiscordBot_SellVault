@@ -34,6 +34,18 @@ def list_packages(enabled_only: bool = True) -> list[dict]:
         return list(cur.fetchall())
 
 
+def list_active_vip_steam_ids() -> list[int]:
+    """Every steam_id with at least one currently-active VIP grant (any tier/group).
+
+    Used by the Discord role-sync loop to compute who should hold the VIP role."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT steam_id FROM `{GRANTS}` "
+            f"WHERE active=1 AND expires_at > UTC_TIMESTAMP();"
+        )
+        return [int(r["steam_id"]) for r in cur.fetchall()]
+
+
 def get_active_grants(steam_id: int) -> list[dict]:
     with _conn() as c, c.cursor() as cur:
         cur.execute(
