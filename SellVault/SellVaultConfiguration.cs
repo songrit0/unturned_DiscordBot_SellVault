@@ -126,6 +126,11 @@ namespace SellVault
 
         /// <summary>Enable quest progress tracking on sale.</summary>
         public bool QuestCheckEnabled;
+
+        /// <summary>Verbose per-action console logging (inventory resize, box close, sell-box process, cooldowns).
+        /// Leave false in production; turn on only when diagnosing sell-box behaviour. Does not affect
+        /// startup/error logs, which are always printed.</summary>
+        public bool DebugLog;
         /// <summary>Chat message on quest completion. Placeholders: {name}, {reward_coins}.</summary>
         public Message MessageQuestComplete;
 
@@ -166,6 +171,7 @@ namespace SellVault
             ActivityResourceHarvested = 1;
             PvpRewardCooldownSeconds = 120;
             PriceRefreshIntervalSeconds = 30f;
+            DebugLog = false;
 
             MsgLinkUsage = new Message(
                 "ใช้: /link <code> (กดปุ่ม Welcome Pack ใน Discord เพื่อรับ code) | Use: /link <code> from Discord", "yellow");

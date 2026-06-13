@@ -63,7 +63,7 @@ namespace SellVault
 
         private void OnInventoryResized(byte page, byte width, byte height)
         {
-            Logger.Log("[SellVault] resize page=" + page + " " + width + "x" + height);
+            SellVaultPlugin.Dbg("[SellVault] resize page=" + page + " " + width + "x" + height);
             if (page != PlayerInventory.STORAGE) return;
             // Server only emits 0x0 here (close). Use that as trigger.
             if (width != 0 || height != 0) return;
@@ -75,7 +75,7 @@ namespace SellVault
             InteractableStorage s = plugin.TryGetVirtualVaultStorage(sid);
             string src = "virtual";
             if (s == null) { s = plugin.FindNearbySellBox(Player.transform.position, 5f); src = "nearby"; }
-            Logger.Log("[SellVault] CLOSED src=" + src + " -> " +
+            SellVaultPlugin.Dbg("[SellVault] CLOSED src=" + src + " -> " +
                 (s != null ? "FOUND @ " + s.transform.position : "none"));
             if (s != null) plugin.OnStorageClosed(Player, s);
         }

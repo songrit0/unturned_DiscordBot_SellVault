@@ -28,6 +28,14 @@ namespace SellVault
         public static SellVaultPlugin Instance { get; private set; }
         public SellDatabase Database { get; private set; }
 
+        /// <summary>Verbose debug log gated behind config DebugLog (default off). Use for the noisy
+        /// per-action traces (resize/close/process/cooldown); startup and error logs bypass this.</summary>
+        public static void Dbg(string msg)
+        {
+            if (Instance?.Configuration?.Instance?.DebugLog == true)
+                Logger.Log(msg);
+        }
+
         private Dictionary<ushort, double> _prices = new Dictionary<ushort, double>();
         private HashSet<string> _boxKeys = new HashSet<string>();
         private readonly Dictionary<string, float> _lastProcess = new Dictionary<string, float>();
@@ -239,7 +247,7 @@ namespace SellVault
             }
 
             string key = PosKey(storage.transform.position);
-            Logger.Log("[SellVault] SetSellBox source=" + source + " key=" + key + " pos=" + storage.transform.position);
+            Dbg("[SellVault] SetSellBox source=" + source + " key=" + key + " pos=" + storage.transform.position);
             bool isNew = _boxKeys.Add(key);
             ulong by = up.CSteamID.m_SteamID;
             ThreadPool.QueueUserWorkItem(_ => Database?.AddSellBox(key, by));
@@ -387,7 +395,7 @@ namespace SellVault
             string key = PosKey(storage.transform.position);
             ulong steamId = up.CSteamID.m_SteamID;
             _virtualVaults[steamId] = new VirtualVault { Key = key, Drop = t, Storage = storage };
-            Logger.Log("[SellVault] OpenSellVault key=" + key + " for " + steamId);
+            Dbg("[SellVault] OpenSellVault key=" + key + " for " + steamId);
 
             try { p.inventory.openStorage(storage); }
             catch (Exception ex)
@@ -457,7 +465,7 @@ namespace SellVault
             int itemCount = storage.items?.items?.Count ?? 0;
             if (itemCount == 0)
             {
-                Logger.Log("[SellVault] skip empty key=" + key);
+                Dbg("[SellVault] skip empty key=" + key);
                 return;
             }
 
@@ -465,12 +473,12 @@ namespace SellVault
             float now = Time.realtimeSinceStartup;
             if (_lastProcess.TryGetValue(key, out float last) && now - last < ProcessCooldown)
             {
-                Logger.Log("[SellVault] cooldown key=" + key + " dt=" + (now - last).ToString("0.00"));
+                Dbg("[SellVault] cooldown key=" + key + " dt=" + (now - last).ToString("0.00"));
                 return;
             }
             _lastProcess[key] = now;
 
-            Logger.Log("[SellVault] PROCESS key=" + key + " items=" + itemCount + " virtual=" + isVirtual);
+            Dbg("[SellVault] PROCESS key=" + key + " items=" + itemCount + " virtual=" + isVirtual);
             ProcessSellBox(player, storage);
             if (isVirtual) DestroyVirtualVault(steamId);
         }
