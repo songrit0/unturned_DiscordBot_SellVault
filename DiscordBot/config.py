@@ -48,6 +48,10 @@ USERNAME_BACKFILL_INTERVAL_MIN = _int("USERNAME_BACKFILL_INTERVAL_MIN", 30)
 # Discord channel and attaches a Buy button. 0 disables the announce loop.
 P2P_FEED_CHANNEL_ID = _int("P2P_FEED_CHANNEL_ID")
 
+# In-game chat webhook relay channel: bot replies with an EN->TH translation under any
+# webhook message shaped "💬 Name: text". 0 disables it.
+GAME_CHAT_CHANNEL_ID = _int("GAME_CHAT_CHANNEL_ID", 1508058571533979748)
+
 # Shop-api base URL the bot calls to execute a P2P buy (logic stays server-side). Stable
 # reserved-ngrok domain in prod. Empty disables the Buy button's API call.
 API_BASE_URL = os.getenv("API_BASE_URL", "").rstrip("/")

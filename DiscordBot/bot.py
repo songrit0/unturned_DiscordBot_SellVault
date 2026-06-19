@@ -15,6 +15,7 @@ import re
 
 import aiohttp
 import discord
+from deep_translator import GoogleTranslator
 from discord import app_commands
 from discord.ext import commands, tasks
 from discord.webhook.async_ import Webhook
@@ -82,7 +83,34 @@ intents = discord.Intents.default()
 # reconcile. MUST ALSO be toggled ON in the Discord Developer Portal (Bot > Privileged Gateway
 # Intents > Server Members Intent), otherwise guild.members is empty and the sync no-ops.
 intents.members = True
+# Privileged Message Content intent — required to read the text of the game-chat webhook
+# messages we translate below. Toggle ON in Developer Portal (Bot > Message Content Intent) too.
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+GAME_CHAT_LINE_RE = re.compile(r"^💬\s*(.+?):\s*(.+)$")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    # Translate in-game chat relayed via webhook ("💬 Name: text"), EN -> TH only. Name is
+    # never translated. Skips own bot replies (webhook_id is None for them).
+    if not config.GAME_CHAT_CHANNEL_ID or message.channel.id != config.GAME_CHAT_CHANNEL_ID:
+        return
+    if message.webhook_id is None:
+        return
+    match = GAME_CHAT_LINE_RE.match(message.content.strip())
+    if not match:
+        return
+    name, text = match.groups()
+    try:
+        translated = await asyncio.to_thread(
+            GoogleTranslator(source="en", target="th").translate, text)
+    except Exception:
+        log.exception("game chat translate failed")
+        return
+    if translated.strip().lower() != text.strip().lower():
+        await message.reply(f"💬 {name}: {translated}", mention_author=False)
 
 # In-memory shopping baskets: discord_id -> {item_id: qty}. Transient (cleared on checkout).
 _baskets: dict = {}

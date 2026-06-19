@@ -2,3 +2,4 @@ discord.py==2.7.1
 PyMySQL>=1.1.0
 python-dotenv>=1.0.0
 aiohttp>=3.9,<4
+deep-translator==1.11.4
