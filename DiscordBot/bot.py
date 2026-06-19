@@ -110,7 +110,11 @@ async def on_message(message: discord.Message):
         log.exception("game chat translate failed")
         return
     if translated.strip().lower() != text.strip().lower():
-        await message.reply(f"💬 {name}: {translated}", mention_author=False)
+        # Discord has no plain-text color markdown; ANSI codeblock is the only way to get
+        # colored text (33 = yellow). Renders plain/monospace on mobile clients, which don't
+        # support ANSI codeblocks.
+        await message.reply(
+            f"```ansi\n💬 {name}: [33m{translated}[0m\n```", mention_author=False)
 
 # In-memory shopping baskets: discord_id -> {item_id: qty}. Transient (cleared on checkout).
 _baskets: dict = {}
