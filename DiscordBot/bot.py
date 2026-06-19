@@ -89,6 +89,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 GAME_CHAT_LINE_RE = re.compile(r"^💬\s*(.+?):\s*(.+)$")
+THAI_RE = re.compile(r"[฀-๿]")
 
 
 @bot.event
@@ -103,6 +104,8 @@ async def on_message(message: discord.Message):
     if not match:
         return
     name, text = match.groups()
+    if THAI_RE.search(text):
+        return
     try:
         translated = await asyncio.to_thread(
             GoogleTranslator(source="en", target="th").translate, text)
