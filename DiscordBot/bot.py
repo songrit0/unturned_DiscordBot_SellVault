@@ -1414,7 +1414,9 @@ def notification_embed(kind: str, payload: dict) -> discord.Embed:
         desc = (f"อัปเดตเกี่ยวกับ **{item_name}** ×{qty}\n"
                 f"Update on **{item_name}** ×{qty}.")
 
-    e = discord.Embed(title=title, description=desc, color=0xE67E22)
+    is_raid = kind.startswith("raid_")
+    color = 0xE74C3C if is_raid else 0xE67E22
+    e = discord.Embed(title=title, description=desc, color=color)
     image_url = payload.get("image_url")
     if isinstance(image_url, str) and image_url.startswith(("http://", "https://")):
         e.set_thumbnail(url=image_url)
@@ -1424,7 +1426,8 @@ def notification_embed(kind: str, payload: dict) -> discord.Embed:
     expires = _expires_value(payload)
     if expires:
         e.add_field(name="⏳ หมดอายุ · Expires", value=expires, inline=False)
-    e.set_footer(text="⚠️ ใช้ก่อนหมดอายุ ไม่งั้นไอเทมจะหายถาวร · Redeem before it expires or the item is lost.")
+    if not is_raid:
+        e.set_footer(text="⚠️ ใช้ก่อนหมดอายุ ไม่งั้นไอเทมจะหายถาวร · Redeem before it expires or the item is lost.")
     return e
 
 
