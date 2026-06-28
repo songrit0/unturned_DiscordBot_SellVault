@@ -1364,16 +1364,6 @@ _NOTIFY_COPY = {
         "th": "ประกาศขาย **{item_name}** ×{qty} ของคุณถูกปิดโดยแอดมิน — รับไอเทมคืนผ่านโค้ดนี้",
         "en": "Your listing for **{item_name}** ×{qty} was closed by an admin — claim your item with this code.",
     },
-    "raid_alert": {
-        "title": "⚔️ บ้านถูกโจมตี · Base under attack",
-        "th": "**{item_name}** กำลัง Raid บ้านของคุณ!",
-        "en": "**{item_name}** is raiding your base!",
-    },
-    "raid_alert_offhours": {
-        "title": "🚨 Raid นอกเวลา · Off-hours raid blocked",
-        "th": "**{item_name}** พยายาม Raid บ้านคุณนอกช่วงเวลา — ผู้โจมตีถูกกักกันแล้ว",
-        "en": "**{item_name}** tried to raid your base outside hours — attacker exiled.",
-    },
 }
 
 
@@ -1397,24 +1387,39 @@ def notification_embed(kind: str, payload: dict) -> discord.Embed:
     payload keys (api contract, all optional so a sparse row still renders):
       item_name, amount, image_url, code, code_expires_at (ISO),
       code_expires_at_unix (epoch seconds).
+    raid_alert/raid_alert_offhours also accept: exile_mins (int).
     """
     item_name = payload.get("item_name") or "ไอเทม / item"
     qty = payload.get("amount") or 1
     code = payload.get("code")
-
-    copy = _NOTIFY_COPY.get(kind)
-    if copy:
-        title = copy["title"]
-        th = copy["th"].format(item_name=item_name, qty=qty)
-        en = copy["en"].format(item_name=item_name, qty=qty)
-        desc = f"{th}\n{en}"
-    else:
-        # Unknown kind — still deliver something useful rather than dropping the DM.
-        title = "🔔 แจ้งเตือน · Notification"
-        desc = (f"อัปเดตเกี่ยวกับ **{item_name}** ×{qty}\n"
-                f"Update on **{item_name}** ×{qty}.")
+    exile_mins = int(payload.get("exile_mins") or 0)
 
     is_raid = kind.startswith("raid_")
+    if kind == "raid_alert":
+        title = "⚔️ บ้านถูกโจมตี · Base under attack"
+        desc = (f"**{item_name}** กำลัง Raid บ้านของคุณในช่วงเวลา Raid!\n"
+                f"**{item_name}** is raiding your base during raid hours!")
+    elif kind == "raid_alert_offhours":
+        title = "🚨 Raid นอกเวลา · Off-hours raid"
+        if exile_mins:
+            desc = (f"**{item_name}** พยายาม Raid บ้านคุณนอกช่วงเวลา — ถูกกักกัน **{exile_mins} นาที**\n"
+                    f"**{item_name}** tried to raid outside hours — exiled **{exile_mins} min**.")
+        else:
+            desc = (f"**{item_name}** พยายาม Raid บ้านคุณนอกช่วงเวลา — ได้รับคำเตือน\n"
+                    f"**{item_name}** tried to raid outside hours — received a warning.")
+    else:
+        copy = _NOTIFY_COPY.get(kind)
+        if copy:
+            title = copy["title"]
+            th = copy["th"].format(item_name=item_name, qty=qty)
+            en = copy["en"].format(item_name=item_name, qty=qty)
+            desc = f"{th}\n{en}"
+        else:
+            # Unknown kind — still deliver something useful rather than dropping the DM.
+            title = "🔔 แจ้งเตือน · Notification"
+            desc = (f"อัปเดตเกี่ยวกับ **{item_name}** ×{qty}\n"
+                    f"Update on **{item_name}** ×{qty}.")
+
     color = 0xE74C3C if is_raid else 0xE67E22
     e = discord.Embed(title=title, description=desc, color=color)
     image_url = payload.get("image_url")
