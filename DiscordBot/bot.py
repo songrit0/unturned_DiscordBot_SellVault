@@ -1364,6 +1364,16 @@ _NOTIFY_COPY = {
         "th": "ประกาศขาย **{item_name}** ×{qty} ของคุณถูกปิดโดยแอดมิน — รับไอเทมคืนผ่านโค้ดนี้",
         "en": "Your listing for **{item_name}** ×{qty} was closed by an admin — claim your item with this code.",
     },
+    "raid_alert": {
+        "title": "⚔️ บ้านถูกโจมตี · Base under attack",
+        "th": "**{item_name}** กำลัง Raid บ้านของคุณ!",
+        "en": "**{item_name}** is raiding your base!",
+    },
+    "raid_alert_offhours": {
+        "title": "🚨 Raid นอกเวลา · Off-hours raid blocked",
+        "th": "**{item_name}** พยายาม Raid บ้านคุณนอกช่วงเวลา — ผู้โจมตีถูกกักกันแล้ว",
+        "en": "**{item_name}** tried to raid your base outside hours — attacker exiled.",
+    },
 }
 
 
