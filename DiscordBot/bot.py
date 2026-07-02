@@ -183,27 +183,135 @@ async def build_top_embed() -> discord.Embed:
     return discord.Embed(title=f"🏆 {config.COIN_NAME} Leaderboard", description="\n".join(lines), color=0xFFD700)
 
 
-def build_commands_embed() -> discord.Embed:
-    e = discord.Embed(title="📖 คำสั่งในเกม / In-game commands", description="พิมพ์ในแชทเกม Unturned",
-                      color=0x95A5A6)
-    e.add_field(name="🌐 เว็บไซต์ / Web shop",
-                value=f"ซื้อ-ขาย / ดูยอด / เช็คโค้ด ผ่านเว็บได้เลย: {config.WEB_SHOP_URL}/login",
-                inline=False)
-    e.add_field(name="/link <code>", value="เชื่อมบัญชี Discord (code จากปุ่ม Welcome Pack) + รับของ", inline=False)
-    e.add_field(name="/sell", value="เปิดกล่องขาย (เฉพาะใน Safe Zone) → วางของ → ปิด → ได้ Coin", inline=False)
-    e.add_field(name="ขายของ (อีกวิธี)", value="เอาของไปวางใน 'กล่อง sell' ที่แอดมินตั้งไว้ แล้วปิดกล่อง → ได้ Coin", inline=False)
-    e.add_field(name="/coins", value="เช็คยอด Coin", inline=False)
-    e.add_field(name="/code <code>", value="ใช้โค้ด (จาก /shop หรือ /bills-shop) รับของเข้าเกม", inline=False)
-    e.add_field(name="💵 Bills",
-                value="ธนบัตร $5/$10/$50/$100/$500 — ซื้อที่ห้อง 💵-bills-shop ใน Discord, ขายที่ /sell ได้เต็มราคา (ไม่หัก commission)",
-                inline=False)
-    e.add_field(name="🎁 Online + Activity Rewards",
-                value="ออนไลน์รับ Coin อัตโนมัติ (ไม่ AFK) + ได้ Coin จากการฆ่าซอมบี้/ผู้เล่น/สัตว์, สร้าง, เก็บทรัพยากร",
-                inline=False)
-    e.add_field(name="/decay", value="เช็คการป้องกันฐาน (ToolCupboard)", inline=False)
-    e.add_field(name="/itemid", value="ดู id ไอเทมที่ถืออยู่", inline=False)
-    e.set_footer(text="แอดมิน: /setsellbox /sellreload /tcreload /dmreload")
-    return e
+def build_commands_embeds() -> list:
+    """Embeds for 📖-commands — full in-game command list (mirrors InfoPanel config, GB/TH)
+    plus an FAQ. Sent as separate messages (combined embeds would blow the 6000-char cap)."""
+    e1 = discord.Embed(title="📖 คำสั่งในเกม (1/2) / In-game commands",
+                       description="พิมพ์ในแชทเกม Unturned · Type in Unturned game chat",
+                       color=0x95A5A6)
+    e1.add_field(name="🧭 General / ทั่วไป", inline=False, value=(
+        "`/help` — Show all commands · ดูคำสั่งทั้งหมด\n"
+        "`/rules` — Server rules · กฎเซิร์ฟเวอร์\n"
+        "`/kits` — Starter kit · รับชุดเริ่มต้น\n"
+        "`/discord` — Join Discord · เข้าดิสคอร์ด"))
+    e1.add_field(name="🏠 Homes / บ้าน", inline=False, value=(
+        "`/home` — Teleport home · วาร์ปกลับบ้าน\n"
+        "`/home [name]` — Teleport to a specific home · วาร์ปไปบ้านที่ระบุ\n"
+        "`/homes` — View all homes · ดูบ้านทั้งหมด\n"
+        "`/renamehome` — Rename home · เปลี่ยนชื่อบ้าน\n"
+        "`/destroyhome` — Delete home · ลบบ้าน\n"
+        "Limit 2 homes · CD 20s · Delay 10s — จำกัด 2 หลัง · คูลดาวน์ 20 วิ · ดีเลย์ 10 วิ"))
+    e1.add_field(name="🌀 Teleport (TPA) / วาร์ปหาผู้เล่น", inline=False, value=(
+        "`/tpa [player]` — Send request · ส่งคำขอวาร์ป\n"
+        "`/tpa a` — Accept · ตอบรับ\n"
+        "`/tpa d` — Deny · ปฏิเสธ\n"
+        "`/tpa c` — Cancel · ยกเลิก\n"
+        "`/tpa whitelist` — Trusted players · รายชื่อคนที่ไว้ใจ\n"
+        "`/tpa blacklist` — Block players · บล็อกผู้เล่น\n"
+        "Request 30s · Cooldown 60s — คำขอ 30 วิ · คูลดาวน์ 60 วิ"))
+    e1.add_field(name="🗄️ Storage / ตู้เก็บของ", inline=False, value=(
+        "`/vault` — Open storage · เปิดตู้เก็บของ\n"
+        "`/vaults` — View all vaults · ดูตู้ทั้งหมด\n"
+        "`/trash` — Temporary item delete · ถังขยะชั่วคราว"))
+    e1.add_field(name="🎒 Backpack / กระเป๋าเสมือน", inline=False, value=(
+        "`/bp` — Open virtual backpack · เปิดกระเป๋าเสมือน\n"
+        "`/bpu` — Upgrade backpack (+1 row) · อัปเกรดกระเป๋า (+1 แถว)"))
+    e1.add_field(name="🧹 Inventory Sort / จัดของ", inline=False, value=(
+        "`/sort` — Auto-sort inventory · จัดกระเป๋าอัตโนมัติ\n"
+        "`/sortui` — Toggle sort panel UI · เปิด/ปิดแผงจัดของ\n"
+        "`/quickstack` — Stack into nearby storage · ยัดของใส่กล่องใกล้ตัว\n"
+        "`/deposit` — Deposit into open container · ฝากของลงกล่องที่เปิดอยู่\n"
+        "`/withdraw` — Take all from container · หยิบของทั้งหมดจากกล่อง\n"
+        "`/restock` — Refill items you carry · เติมของที่พกอยู่"))
+    e1.add_field(name="🚗 Vehicle Garage / โรงรถ", inline=False, value=(
+        "`/garage` — View stored vehicles · ดูรถที่เก็บไว้\n"
+        "`/gadd [name]` — Store vehicle · เก็บรถ\n"
+        "`/gretrieve [name]` — Retrieve vehicle · เอารถออก\n"
+        "`/garagedelete [name]` — Delete vehicle · ลบรถ"))
+
+    e2 = discord.Embed(title="📖 คำสั่งในเกม (2/2) / In-game commands", color=0x95A5A6)
+    e2.add_field(name="💫 Revive System / ระบบช่วยฟื้น", inline=False, value=(
+        "Downed players need help to survive · ผู้เล่นที่ล้มต้องมีคนช่วยถึงจะฟื้น\n"
+        "Hold crouch near them 8s, within 4 m · ย่อค้างใกล้คนล้ม 8 วิ ในระยะ 4 ม.\n"
+        "Moving or standing cancels · ขยับหรือยืนขึ้น = ยกเลิก\n"
+        "Anyone can revive (not team locked) · ใครก็ช่วยได้ ไม่จำกัดทีม\n"
+        "`/knockdown on|off|status` — Opt in/out · เปิด/ปิดระบบล้ม\n"
+        "`/knockme` — Test knockdown (no death) · ทดสอบล้ม (ไม่ตาย)\n"
+        "`/cuff` — Cuff a downed player · ใส่กุญแจมือคนล้ม\n"
+        "`/uncuff` — Release cuffed player · ปลดกุญแจมือ"))
+    e2.add_field(name="⚔️ KOTH / PVP Event", inline=False, value=(
+        "`/koth` — Open PVP menu · เปิดเมนู PVP\n"
+        "`/jkoth` — Join current event · เข้าร่วมอีเวนต์\n"
+        "`/leavekoth` — Leave event · ออกจากอีเวนต์\n"
+        "`/watchkoth` — Spectate · ดูการแข่ง\n"
+        "`/savekit` — Save PVP loadout · เซฟชุด PVP\n"
+        "`/claimkoth` — Claim rewards · รับรางวัล\n"
+        "`/kothtop` — Leaderboard · ตารางอันดับ\n"
+        "`/votetime day|night` — Vote time change · โหวตเปลี่ยนเวลา\n"
+        "`/vote [no]` — Cast time vote · ลงคะแนนโหวต"))
+    e2.add_field(name="🛢️ Oil Market / ตลาดน้ำมัน", inline=False, value=(
+        "`/oil` — Open oil station UI · เปิดหน้าปั๊มน้ำมัน\n"
+        "`/selloil` — Sell oil for coins · ขายน้ำมันแลก Coin\n"
+        "`/buyoil` — Buy oil with coins · ซื้อน้ำมันด้วย Coin\n"
+        "`/oilprice` — Check current price · เช็คราคาน้ำมัน"))
+    e2.add_field(name="📊 Stats / สถิติ", inline=False, value=(
+        "`/stats [player]` — Player stats · สถิติผู้เล่น\n"
+        "`/playtime [player]` — Total playtime · เวลาเล่นรวม\n"
+        "`/rank [player]` — View ranking · ดูอันดับ\n"
+        "`/ranking` — Top players · ผู้เล่นอันดับต้น\n"
+        "`/sstats [player]` — Session stats · สถิติรอบนี้\n"
+        "`/splaytime [player]` — Session playtime · เวลาเล่นรอบนี้\n"
+        "`/statsui` — Toggle stats UI · เปิด/ปิด UI สถิติ"))
+    e2.add_field(name="🛒 Shop & Economy / ร้านค้า", inline=False, value=(
+        "`/menu` — In-game kits/shop menu · เมนูร้านค้าในเกม\n"
+        "`/sell` — Open sell vault (Safe Zone) · เปิดกล่องขายของ (เซฟโซน)\n"
+        "`/coins` — Check balance · เช็คยอด Coin\n"
+        "`/code [code]` — Redeem a code · ใช้โค้ดรับของ\n"
+        "`/link [code]` — Link Discord account · เชื่อมบัญชี Discord\n"
+        "`/shop` — Web shop login link · ลิงก์เข้าเว็บช็อป\n"
+        "`/shoppin [pin]` — Set web login PIN · ตั้ง PIN เข้าเว็บ\n"
+        "`/vip` — Check VIP status · เช็คสถานะ VIP\n"
+        f"🌐 เว็บช็อป · Web shop: {config.WEB_SHOP_URL}/login"))
+    e2.add_field(name="🧩 Other / อื่น ๆ", inline=False, value=(
+        "`/raidstatus` — Raid window status · เช็คช่วงเวลา Raid\n"
+        "`/sethotkey 2-5 [cmd]` — Bind plugin key · ตั้งปุ่มลัดคำสั่ง"))
+    e2.set_footer(text="Raid: Mon-Thu 18:00-00:00 · Fri 18:00 → Mon 00:00 (UTC+7) · "
+                       "จ-พฤ 18:00-00:00 น. · ศ 18:00 น. → จ 00:00 น.")
+
+    faq = discord.Embed(title="❓ คำถามที่พบบ่อย / FAQ", color=0x3498DB)
+    faq.add_field(name="เชื่อมบัญชี Discord ยังไง? · How do I link my account?", inline=False, value=(
+        "กดปุ่มที่ห้อง 🎁-welcome รับโค้ด แล้วพิมพ์ `/link <code>` ในเกม — ได้ Welcome Pack ด้วย\n"
+        "Tap the Welcome Pack button, then type `/link <code>` in-game."))
+    faq.add_field(name="หา Coin ยังไง? · How do I earn coins?", inline=False, value=(
+        "ขายของที่ `/sell` (เซฟโซน), ขายน้ำมัน `/selloil`, ออนไลน์รับ Coin อัตโนมัติ, "
+        "ฆ่าซอมบี้/เก็บทรัพยากร, รางวัล KOTH\n"
+        "Sell items at `/sell`, sell oil, stay online (auto rewards), zombie kills, KOTH rewards."))
+    faq.add_field(name="Raid บ้านได้ตอนไหน? · When can I raid?", inline=False, value=(
+        "จ-พฤ 18:00-00:00 น. · ศ 18:00 น. → จ 00:00 น. (UTC+7) — เช็คด้วย `/raidstatus`\n"
+        "Raid นอกเวลา = โดนเตือน/กักกัน · Off-hours raiding gets you warned or exiled."))
+    faq.add_field(name="ตั้งบ้านยังไง? · How do homes work?", inline=False, value=(
+        "วางเตียง = บ้าน แล้วใช้ `/home` วาร์ปกลับ (จำกัด 2 หลัง)\n"
+        "Place a bed to set a home, then `/home` to return (max 2 homes)."))
+    faq.add_field(name="ป้องกันฐานยังไง? · How do I protect my base?", inline=False, value=(
+        "วาง Tool Cupboard + Generator ในฐาน แล้วเช็คสถานะด้วย `/decay`\n"
+        "Place a Tool Cupboard + Generator; check protection with `/decay`."))
+    faq.add_field(name="ล้มแล้วทำยังไง? · I'm downed — what now?", inline=False, value=(
+        "ให้เพื่อนย่อค้างข้าง ๆ 8 วิ ในระยะ 4 ม. — ใครก็ช่วยได้\n"
+        "A teammate (or anyone) crouch-holds next to you for 8s within 4 m."))
+    faq.add_field(name="ตายแล้วของหายไหม? · Do I lose items on death?", inline=False, value=(
+        "ของจะอยู่ในกล่อง Deadbox ตรงจุดที่ตาย — รีบกลับไปเก็บ\n"
+        "Your loot drops into a deadbox where you died — go grab it back."))
+    faq.add_field(name="เก็บของถาวรได้ที่ไหน? · Where do I store items safely?", inline=False, value=(
+        "`/vault` ตู้เก็บของ · `/bp` กระเป๋าเสมือน · `/garage` เก็บรถ\n"
+        "Vault storage, virtual backpack, and vehicle garage."))
+    faq.add_field(name="ซื้อของจากเว็บยังไง? · How do I buy from the web shop?", inline=False, value=(
+        f"`/shop` ในเกมรับลิงก์ → ซื้อบนเว็บ {config.WEB_SHOP_URL}/login → ได้โค้ด → พิมพ์ `/code <code>` ในเกม\n"
+        "Get the login link with `/shop`, buy on the web, then redeem with `/code` in-game."))
+    faq.add_field(name="VIP ได้ยังไง? · How do I get VIP?", inline=False, value=(
+        "ซื้อผ่านเว็บ/Discord แล้วเช็คสถานะด้วย `/vip` ในเกม\n"
+        "Buy via the web shop or Discord, then check with `/vip` in-game."))
+
+    return [e1, e2, faq]
 
 
 # ---------------- player-facing views ----------------
@@ -1233,12 +1341,17 @@ async def setup(interaction: discord.Interaction):
 
         welcome = await ensure_channel("🎁-welcome")
         coins_ch = await ensure_channel("💰-my-coins")
-        shop_ch = await ensure_channel("🛒-shop")
-        bills_ch = await ensure_channel("💵-bills-shop")
-        market_ch = await ensure_channel("🏷️-market")
-        p2p_ch = await ensure_channel("🤝-p2p-market")
         lb = await ensure_channel("🏆-leaderboard")
         cmds_ch = await ensure_channel("📖-commands")
+
+        # Retired channels — delete leftovers from an older /setup layout.
+        for name in ("🛒-shop", "💵-bills-shop", "🏷️-market", "🤝-p2p-market"):
+            old = discord.utils.get(guild.text_channels, name=name)
+            if old is not None:
+                try:
+                    await old.delete(reason="removed from /setup layout")
+                except Exception:
+                    log.exception("setup: failed to delete retired channel %s", name)
 
         admin_over = {
             everyone: discord.PermissionOverwrite(view_channel=False),
@@ -1250,9 +1363,7 @@ async def setup(interaction: discord.Interaction):
                 admin_over[role] = discord.PermissionOverwrite(view_channel=True)
         admin_ch = await ensure_channel("🛠️-admin", admin_over)
 
-        # Note: 🤝-p2p-market is the auto-feed — don't purge it (would delete live listing
-        # posts and their Buy buttons; announced_at already marks them as posted).
-        for ch in (welcome, coins_ch, shop_ch, bills_ch, market_ch, lb, cmds_ch, admin_ch):
+        for ch in (welcome, coins_ch, lb, cmds_ch, admin_ch):
             try:
                 await ch.purge(limit=20, check=lambda m: m.author == guild.me)
             except Exception:
@@ -1269,26 +1380,9 @@ async def setup(interaction: discord.Interaction):
             view=LinkView())
         await coins_ch.send(embed=discord.Embed(
             title="💰 เช็ค Coin / My Coins", description="กดปุ่มเพื่อดูยอด Coin", color=0xF1C40F), view=BalanceView())
-        await shop_ch.send(embed=discord.Embed(
-            title="🛒 ร้านค้า / Shop", description="ซื้อชิ้นเดี่ยว หรือแพ็กเกจ ด้วย Coin → ได้โค้ด → /code ในเกม",
-            color=0x3498DB), view=ShopPanelView())
-        await bills_ch.send(embed=discord.Embed(
-            title="💵 ซื้อ Bills / Bills Shop",
-            description=("ซื้อธนบัตรในเกมด้วย Coin → ได้โค้ด → /code ในเกม\n"
-                         "ขายธนบัตรในเกมที่ /sell ได้เต็มราคา ไม่หัก commission"),
-            color=0x27AE60), view=BillsShopPanelView())
-        await market_ch.send(embed=discord.Embed(
-            title="🏷️ รายการตลาด / Market",
-            description="กดดูรายการของที่ซื้อ/ขายได้ + ราคา (ขายจริงในเกมที่กล่อง sell)", color=0xE67E22),
-            view=MarketListView())
-        await p2p_ch.send(embed=discord.Embed(
-            title="🤝 ตลาดผู้เล่น / Player Market",
-            description=("ประกาศขายของผู้เล่นจะโผล่ที่นี่อัตโนมัติ — กด **ซื้อ / Buy** ใต้รายการเพื่อซื้อด้วย Coin → ได้โค้ด → /code ในเกม\n"
-                         "New player listings post here automatically — tap **Buy** under an item to purchase with Coin.\n\n"
-                         f"🌐 ลงขาย/ดูทั้งหมดบนเว็บ · List & browse on the web: {config.WEB_SHOP_URL}"),
-            color=0x1ABC9C))
         await lb.send(embed=await build_top_embed(), view=LeaderboardView())
-        await cmds_ch.send(embed=build_commands_embed())
+        for e in build_commands_embeds():
+            await cmds_ch.send(embed=e)
         await admin_ch.send(embed=discord.Embed(
             title="🛠️ Admin Panel", description="กดปุ่มเพื่อจัดการ — เด้ง popup (เฉพาะแอดมิน)", color=0xE74C3C),
             view=AdminPanelView())
@@ -1303,7 +1397,7 @@ async def setup(interaction: discord.Interaction):
 
     await interaction.followup.send(
         "ตั้งค่าเสร็จ ✅ " + " · ".join(
-            c.mention for c in (welcome, coins_ch, shop_ch, bills_ch, market_ch, p2p_ch, lb, cmds_ch, admin_ch)),
+            c.mention for c in (welcome, coins_ch, lb, cmds_ch, admin_ch)),
         ephemeral=True)
 
 
