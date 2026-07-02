@@ -175,7 +175,7 @@ async def build_top_embed() -> discord.Embed:
     rows = await asyncio.to_thread(db.top_coins, 10)
     if not rows:
         return discord.Embed(title=f"🏆 {config.COIN_NAME} Leaderboard",
-                             description="ยังไม่มีข้อมูล", color=0xFFD700)
+                             description="ยังไม่มีข้อมูล · No data yet.", color=0xFFD700)
     lines = []
     for i, r in enumerate(rows, 1):
         who = f"<@{r['discord_id']}>" if r.get("discord_id") else f"`{r['steam_id']}`"
@@ -184,15 +184,17 @@ async def build_top_embed() -> discord.Embed:
 
 
 def build_commands_embeds() -> list:
-    """Embeds for 📖-commands — full in-game command list (mirrors InfoPanel config, GB/TH)
-    plus an FAQ. Sent as separate messages (combined embeds would blow the 6000-char cap)."""
-    e1 = discord.Embed(title="📖 คำสั่งในเกม (1/2) / In-game commands",
+    """Embeds for 📖-commands — player-usable in-game commands only (filtered against the
+    Rocket Permissions.config.xml default group) plus an FAQ, all GB/TH."""
+    e1 = discord.Embed(title="📖 คำสั่งในเกม / In-game commands",
                        description="พิมพ์ในแชทเกม Unturned · Type in Unturned game chat",
                        color=0x95A5A6)
     e1.add_field(name="🧭 General / ทั่วไป", inline=False, value=(
         "`/help` — Show all commands · ดูคำสั่งทั้งหมด\n"
-        "`/rules` — Server rules · กฎเซิร์ฟเวอร์\n"
-        "`/kits` — Starter kit · รับชุดเริ่มต้น\n"
+        "`/info` — Open server info panel · เปิดหน้าข้อมูลเซิร์ฟ\n"
+        "`/kits` — List your kits · ดูชุดของคุณ\n"
+        "`/kit [name]` — Claim a kit · รับชุดเริ่มต้น\n"
+        "`/compass` — Show direction · ดูทิศ\n"
         "`/discord` — Join Discord · เข้าดิสคอร์ด"))
     e1.add_field(name="🏠 Homes / บ้าน", inline=False, value=(
         "`/home` — Teleport home · วาร์ปกลับบ้าน\n"
@@ -209,60 +211,23 @@ def build_commands_embeds() -> list:
         "`/tpa whitelist` — Trusted players · รายชื่อคนที่ไว้ใจ\n"
         "`/tpa blacklist` — Block players · บล็อกผู้เล่น\n"
         "Request 30s · Cooldown 60s — คำขอ 30 วิ · คูลดาวน์ 60 วิ"))
-    e1.add_field(name="🗄️ Storage / ตู้เก็บของ", inline=False, value=(
+    e1.add_field(name="🗄️ Storage & Backpack / ตู้เก็บของ", inline=False, value=(
         "`/vault` — Open storage · เปิดตู้เก็บของ\n"
         "`/vaults` — View all vaults · ดูตู้ทั้งหมด\n"
-        "`/trash` — Temporary item delete · ถังขยะชั่วคราว"))
-    e1.add_field(name="🎒 Backpack / กระเป๋าเสมือน", inline=False, value=(
         "`/bp` — Open virtual backpack · เปิดกระเป๋าเสมือน\n"
         "`/bpu` — Upgrade backpack (+1 row) · อัปเกรดกระเป๋า (+1 แถว)"))
-    e1.add_field(name="🧹 Inventory Sort / จัดของ", inline=False, value=(
-        "`/sort` — Auto-sort inventory · จัดกระเป๋าอัตโนมัติ\n"
-        "`/sortui` — Toggle sort panel UI · เปิด/ปิดแผงจัดของ\n"
-        "`/quickstack` — Stack into nearby storage · ยัดของใส่กล่องใกล้ตัว\n"
-        "`/deposit` — Deposit into open container · ฝากของลงกล่องที่เปิดอยู่\n"
-        "`/withdraw` — Take all from container · หยิบของทั้งหมดจากกล่อง\n"
-        "`/restock` — Refill items you carry · เติมของที่พกอยู่"))
     e1.add_field(name="🚗 Vehicle Garage / โรงรถ", inline=False, value=(
         "`/garage` — View stored vehicles · ดูรถที่เก็บไว้\n"
         "`/gadd [name]` — Store vehicle · เก็บรถ\n"
-        "`/gretrieve [name]` — Retrieve vehicle · เอารถออก\n"
-        "`/garagedelete [name]` — Delete vehicle · ลบรถ"))
-
-    e2 = discord.Embed(title="📖 คำสั่งในเกม (2/2) / In-game commands", color=0x95A5A6)
-    e2.add_field(name="💫 Revive System / ระบบช่วยฟื้น", inline=False, value=(
-        "Downed players need help to survive · ผู้เล่นที่ล้มต้องมีคนช่วยถึงจะฟื้น\n"
-        "Hold crouch near them 8s, within 4 m · ย่อค้างใกล้คนล้ม 8 วิ ในระยะ 4 ม.\n"
-        "Moving or standing cancels · ขยับหรือยืนขึ้น = ยกเลิก\n"
-        "Anyone can revive (not team locked) · ใครก็ช่วยได้ ไม่จำกัดทีม\n"
-        "`/knockdown on|off|status` — Opt in/out · เปิด/ปิดระบบล้ม\n"
-        "`/knockme` — Test knockdown (no death) · ทดสอบล้ม (ไม่ตาย)\n"
-        "`/cuff` — Cuff a downed player · ใส่กุญแจมือคนล้ม\n"
-        "`/uncuff` — Release cuffed player · ปลดกุญแจมือ"))
-    e2.add_field(name="⚔️ KOTH / PVP Event", inline=False, value=(
+        "`/gretrieve [name]` — Retrieve vehicle · เอารถออก"))
+    e1.add_field(name="⚔️ KOTH / PVP Event", inline=False, value=(
         "`/koth` — Open PVP menu · เปิดเมนู PVP\n"
         "`/jkoth` — Join current event · เข้าร่วมอีเวนต์\n"
         "`/leavekoth` — Leave event · ออกจากอีเวนต์\n"
-        "`/watchkoth` — Spectate · ดูการแข่ง\n"
         "`/savekit` — Save PVP loadout · เซฟชุด PVP\n"
         "`/claimkoth` — Claim rewards · รับรางวัล\n"
-        "`/kothtop` — Leaderboard · ตารางอันดับ\n"
-        "`/votetime day|night` — Vote time change · โหวตเปลี่ยนเวลา\n"
-        "`/vote [no]` — Cast time vote · ลงคะแนนโหวต"))
-    e2.add_field(name="🛢️ Oil Market / ตลาดน้ำมัน", inline=False, value=(
-        "`/oil` — Open oil station UI · เปิดหน้าปั๊มน้ำมัน\n"
-        "`/selloil` — Sell oil for coins · ขายน้ำมันแลก Coin\n"
-        "`/buyoil` — Buy oil with coins · ซื้อน้ำมันด้วย Coin\n"
-        "`/oilprice` — Check current price · เช็คราคาน้ำมัน"))
-    e2.add_field(name="📊 Stats / สถิติ", inline=False, value=(
-        "`/stats [player]` — Player stats · สถิติผู้เล่น\n"
-        "`/playtime [player]` — Total playtime · เวลาเล่นรวม\n"
-        "`/rank [player]` — View ranking · ดูอันดับ\n"
-        "`/ranking` — Top players · ผู้เล่นอันดับต้น\n"
-        "`/sstats [player]` — Session stats · สถิติรอบนี้\n"
-        "`/splaytime [player]` — Session playtime · เวลาเล่นรอบนี้\n"
-        "`/statsui` — Toggle stats UI · เปิด/ปิด UI สถิติ"))
-    e2.add_field(name="🛒 Shop & Economy / ร้านค้า", inline=False, value=(
+        "`/kothtop` — Leaderboard · ตารางอันดับ"))
+    e1.add_field(name="🛒 Shop & Economy / ร้านค้า", inline=False, value=(
         "`/menu` — In-game kits/shop menu · เมนูร้านค้าในเกม\n"
         "`/sell` — Open sell vault (Safe Zone) · เปิดกล่องขายของ (เซฟโซน)\n"
         "`/coins` — Check balance · เช็คยอด Coin\n"
@@ -270,12 +235,11 @@ def build_commands_embeds() -> list:
         "`/link [code]` — Link Discord account · เชื่อมบัญชี Discord\n"
         "`/shop` — Web shop login link · ลิงก์เข้าเว็บช็อป\n"
         "`/shoppin [pin]` — Set web login PIN · ตั้ง PIN เข้าเว็บ\n"
-        "`/vip` — Check VIP status · เช็คสถานะ VIP\n"
         f"🌐 เว็บช็อป · Web shop: {config.WEB_SHOP_URL}/login"))
-    e2.add_field(name="🧩 Other / อื่น ๆ", inline=False, value=(
-        "`/raidstatus` — Raid window status · เช็คช่วงเวลา Raid\n"
+    e1.add_field(name="🧩 Other / อื่น ๆ", inline=False, value=(
+        "`/decay` — Base protection status · เช็คการป้องกันฐาน\n"
         "`/sethotkey 2-5 [cmd]` — Bind plugin key · ตั้งปุ่มลัดคำสั่ง"))
-    e2.set_footer(text="Raid: Mon-Thu 18:00-00:00 · Fri 18:00 → Mon 00:00 (UTC+7) · "
+    e1.set_footer(text="Raid: Mon-Thu 18:00-00:00 · Fri 18:00 → Mon 00:00 (UTC+7) · "
                        "จ-พฤ 18:00-00:00 น. · ศ 18:00 น. → จ 00:00 น.")
 
     faq = discord.Embed(title="❓ คำถามที่พบบ่อย / FAQ", color=0x3498DB)
@@ -283,11 +247,11 @@ def build_commands_embeds() -> list:
         "กดปุ่มที่ห้อง 🎁-welcome รับโค้ด แล้วพิมพ์ `/link <code>` ในเกม — ได้ Welcome Pack ด้วย\n"
         "Tap the Welcome Pack button, then type `/link <code>` in-game."))
     faq.add_field(name="หา Coin ยังไง? · How do I earn coins?", inline=False, value=(
-        "ขายของที่ `/sell` (เซฟโซน), ขายน้ำมัน `/selloil`, ออนไลน์รับ Coin อัตโนมัติ, "
+        "ขายของที่ `/sell` (เซฟโซน), ออนไลน์รับ Coin อัตโนมัติ, "
         "ฆ่าซอมบี้/เก็บทรัพยากร, รางวัล KOTH\n"
-        "Sell items at `/sell`, sell oil, stay online (auto rewards), zombie kills, KOTH rewards."))
+        "Sell items at `/sell`, stay online (auto rewards), zombie kills, KOTH rewards."))
     faq.add_field(name="Raid บ้านได้ตอนไหน? · When can I raid?", inline=False, value=(
-        "จ-พฤ 18:00-00:00 น. · ศ 18:00 น. → จ 00:00 น. (UTC+7) — เช็คด้วย `/raidstatus`\n"
+        "จ-พฤ 18:00-00:00 น. · ศ 18:00 น. → จ 00:00 น. (UTC+7)\n"
         "Raid นอกเวลา = โดนเตือน/กักกัน · Off-hours raiding gets you warned or exiled."))
     faq.add_field(name="ตั้งบ้านยังไง? · How do homes work?", inline=False, value=(
         "วางเตียง = บ้าน แล้วใช้ `/home` วาร์ปกลับ (จำกัด 2 หลัง)\n"
@@ -311,7 +275,7 @@ def build_commands_embeds() -> list:
         "ซื้อผ่านเว็บ/Discord แล้วเช็คสถานะด้วย `/vip` ในเกม\n"
         "Buy via the web shop or Discord, then check with `/vip` in-game."))
 
-    return [e1, e2, faq]
+    return [e1, faq]
 
 
 # ---------------- player-facing views ----------------
@@ -328,16 +292,20 @@ class LinkView(discord.ui.View):
         did = interaction.user.id
         try:
             if await asyncio.to_thread(db.is_discord_linked, did):
-                await interaction.response.send_message("บัญชีนี้เชื่อมแล้ว ✅", ephemeral=True)
+                await interaction.response.send_message(
+                    "บัญชีนี้เชื่อมแล้ว ✅ · Already linked.", ephemeral=True)
                 return
             code = await asyncio.to_thread(db.create_link_code, did)
         except Exception:
             log.exception("link button failed")
-            await interaction.response.send_message("เกิดข้อผิดพลาด ลองใหม่", ephemeral=True)
+            await interaction.response.send_message(
+                "เกิดข้อผิดพลาด ลองใหม่ · Something went wrong, try again.", ephemeral=True)
             return
         await interaction.response.send_message(
-            f"เข้าเกมแล้วพิมพ์:\n```/link {code}```\nเชื่อมบัญชี + รับ Welcome Pack 🎁 *(code ใช้ครั้งเดียว)*\n\n"
-            f"หรือซื้อ-ขายผ่านเว็บที่ {config.WEB_SHOP_URL}/login (login ด้วย Discord เดียวกัน)",
+            f"เข้าเกมแล้วพิมพ์ · In-game, type:\n```/link {code}```\n"
+            f"เชื่อมบัญชี + รับ Welcome Pack 🎁 *(code ใช้ครั้งเดียว)*\n"
+            f"Link your account + claim the Welcome Pack *(one-time code)*\n\n"
+            f"🌐 หรือซื้อ-ขายผ่านเว็บ · Or trade on the web: {config.WEB_SHOP_URL}/login",
             ephemeral=True)
 
 
@@ -350,10 +318,11 @@ class BalanceView(discord.ui.View):
     async def check(self, interaction: discord.Interaction, button: discord.ui.Button):
         steam = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
         if steam is None:
-            await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน", ephemeral=True)
+            await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน · Link your account first (Welcome Pack button).", ephemeral=True)
             return
         bal = await asyncio.to_thread(db.get_coins, steam)
-        await interaction.response.send_message(f"💰 ยอดของคุณ: **{bal}** {config.COIN_NAME}", ephemeral=True)
+        await interaction.response.send_message(
+            f"💰 ยอดของคุณ · Your balance: **{bal}** {config.COIN_NAME}", ephemeral=True)
 
 
 class MarketListView(discord.ui.View):
@@ -488,18 +457,20 @@ class BasketActionsView(discord.ui.View):
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         basket = dict(basket_get(interaction.user.id))
         if not basket:
-            await interaction.response.send_message("ตะกร้าว่าง", ephemeral=True)
+            await interaction.response.send_message("ตะกร้าว่าง · Basket empty.", ephemeral=True)
             return
         try:
             status, payload = await asyncio.to_thread(db.buy_basket, interaction.user.id, basket)
         except Exception:
             log.exception("buy_basket failed")
-            await interaction.response.send_message("เกิดข้อผิดพลาด", ephemeral=True)
+            await interaction.response.send_message(
+                "เกิดข้อผิดพลาด · Something went wrong.", ephemeral=True)
             return
         if status == "ok":
             basket_clear(interaction.user.id)
             await interaction.response.send_message(
-                f"ซื้อสำเร็จ! เข้าเกมพิมพ์:\n```/code {payload}```\nรับของทั้งตะกร้า", ephemeral=True)
+                f"ซื้อสำเร็จ! · Purchased!\nเข้าเกมพิมพ์ · In-game, type:\n```/code {payload}```\n"
+                f"รับของทั้งตะกร้า · to claim your basket", ephemeral=True)
         else:
             await _buy_reply(interaction, status, payload)
 
@@ -511,20 +482,21 @@ class BasketActionsView(discord.ui.View):
 
 async def _buy_reply(interaction, status, payload):
     if status == "not_linked":
-        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน", ephemeral=True)
+        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน · Link your account first (Welcome Pack button).", ephemeral=True)
     elif status == "empty":
-        await interaction.response.send_message("ตะกร้าว่าง", ephemeral=True)
+        await interaction.response.send_message("ตะกร้าว่าง · Basket empty.", ephemeral=True)
     elif status == "no_item":
-        await interaction.response.send_message("ไม่พบสินค้า", ephemeral=True)
+        await interaction.response.send_message("ไม่พบสินค้า · Item not found.", ephemeral=True)
     elif status == "out_of_stock":
         extra = f" ({payload})" if isinstance(payload, str) else ""
-        await interaction.response.send_message(f"ของหมดสต็อก{extra}", ephemeral=True)
+        await interaction.response.send_message(f"ของหมดสต็อก · Out of stock{extra}", ephemeral=True)
     elif status == "insufficient":
         await interaction.response.send_message(
             f"Coin ไม่พอ (มี {payload}) | Not enough (have {payload}).", ephemeral=True)
     else:
         await interaction.response.send_message(
-            f"ซื้อสำเร็จ! เข้าเกมพิมพ์:\n```/code {payload}```\nเพื่อรับของ", ephemeral=True)
+            f"ซื้อสำเร็จ! · Purchased!\nเข้าเกมพิมพ์ · In-game, type:\n```/code {payload}```\n"
+            f"เพื่อรับของ · to claim", ephemeral=True)
 
 
 # ---------------- slash commands (players) ----------------
@@ -533,10 +505,11 @@ async def _buy_reply(interaction, status, payload):
 async def coins(interaction: discord.Interaction):
     steam = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
     if steam is None:
-        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน", ephemeral=True)
+        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน · Link your account first (Welcome Pack button).", ephemeral=True)
         return
     bal = await asyncio.to_thread(db.get_coins, steam)
-    await interaction.response.send_message(f"💰 ยอดของคุณ: **{bal}** {config.COIN_NAME}", ephemeral=True)
+    await interaction.response.send_message(
+        f"💰 ยอดของคุณ · Your balance: **{bal}** {config.COIN_NAME}", ephemeral=True)
 
 
 @bot.tree.command(description="อันดับ Coin / leaderboard")
@@ -637,18 +610,20 @@ async def market(interaction: discord.Interaction):
 async def pay(interaction: discord.Interaction, member: discord.Member, amount: int):
     status, payload = await asyncio.to_thread(db.transfer_coins, interaction.user.id, member.id, amount)
     msgs = {
-        "bad_amount": "จำนวนต้องมากกว่า 0",
-        "not_linked_self": "คุณยังไม่เชื่อมบัญชี",
-        "not_linked_target": "ผู้รับยังไม่เชื่อมบัญชี",
-        "self": "โอนให้ตัวเองไม่ได้",
+        "bad_amount": "จำนวนต้องมากกว่า 0 · Amount must be positive.",
+        "not_linked_self": "คุณยังไม่เชื่อมบัญชี · You haven't linked your account.",
+        "not_linked_target": "ผู้รับยังไม่เชื่อมบัญชี · Recipient hasn't linked their account.",
+        "self": "โอนให้ตัวเองไม่ได้ · You can't pay yourself.",
     }
     if status in msgs:
         await interaction.response.send_message(msgs[status], ephemeral=True)
     elif status == "insufficient":
-        await interaction.response.send_message(f"Coin ไม่พอ (มี {payload})", ephemeral=True)
+        await interaction.response.send_message(
+            f"Coin ไม่พอ (มี {payload}) · Not enough (have {payload}).", ephemeral=True)
     else:
         await interaction.response.send_message(
-            f"✅ โอน {amount} {config.COIN_NAME} ให้ {member.mention} (เหลือ {payload})", ephemeral=True)
+            f"✅ โอน {amount} {config.COIN_NAME} ให้ {member.mention} (เหลือ {payload}) · "
+            f"Sent {amount} to {member.mention} (balance {payload}).", ephemeral=True)
 
 
 def _quest_status_emoji(q) -> str:
@@ -664,24 +639,25 @@ def _quest_progress_line(it) -> str:
 def quest_summary_embed(quests) -> discord.Embed:
     e = discord.Embed(title="📜 เควสต์ปัจจุบัน / Active Quests", color=0xF1C40F)
     if not quests:
-        e.description = "ยังไม่มีเควสต์ที่เปิดอยู่ในช่วงนี้"
+        e.description = "ยังไม่มีเควสต์ที่เปิดอยู่ในช่วงนี้ · No active quests right now."
         return e
     for q in quests:
         parts = [_quest_progress_line(it) for it in q["items"]]
         status = _quest_status_emoji(q)
-        body = " + ".join(parts) if parts else "_(ไม่มี items)_"
+        body = " + ".join(parts) if parts else "_(ไม่มี items · no items)_"
         e.add_field(
-            name=f"{status} #{q['id']} {q['name']} — รางวัล {int(q['reward_coins'])} {config.COIN_NAME}",
+            name=f"{status} #{q['id']} {q['name']} — รางวัล/Reward {int(q['reward_coins'])} {config.COIN_NAME}",
             value=f"{body}\n_reset: {q['reset_type']} · period: `{q['period_key']}`_",
             inline=False)
-    e.set_footer(text="ขายไอเทมที่กำหนดในเกมเพื่อสะสม progress · /quest <id> ดูรายละเอียด")
+    e.set_footer(text="ขายไอเทมที่กำหนดในเกมเพื่อสะสม progress · Sell the listed items in-game "
+                      "to progress · /quest <id>")
     return e
 
 
 def quest_detail_embed(q) -> discord.Embed:
     color = 0x2ECC71 if q.get("completed") else 0x3498DB
     e = discord.Embed(title=f"📜 #{q['id']} {q['name']}",
-                      description=q.get("description") or "_(ไม่มีคำอธิบาย)_",
+                      description=q.get("description") or "_(ไม่มีคำอธิบาย · no description)_",
                       color=color)
     e.add_field(name="รางวัล / Reward",
                 value=f"{int(q['reward_coins'])} {config.COIN_NAME}", inline=True)
@@ -691,10 +667,10 @@ def quest_detail_embed(q) -> discord.Embed:
         lines = [_quest_progress_line(it) for it in q["items"]]
         e.add_field(name="ความคืบหน้า / Progress", value="\n".join(lines), inline=False)
     else:
-        e.add_field(name="ความคืบหน้า / Progress", value="_(ไม่มี items)_", inline=False)
+        e.add_field(name="ความคืบหน้า / Progress", value="_(ไม่มี items · no items)_", inline=False)
     if q.get("completed"):
         when = q.get("completed_at")
-        e.set_footer(text=f"เสร็จสมบูรณ์แล้ว ✅ {when or ''}".strip())
+        e.set_footer(text=f"เสร็จสมบูรณ์แล้ว · Completed ✅ {when or ''}".strip())
     return e
 
 
@@ -702,7 +678,7 @@ def quest_detail_embed(q) -> discord.Embed:
 async def quests(interaction: discord.Interaction):
     steam = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
     if steam is None:
-        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน", ephemeral=True)
+        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน · Link your account first (Welcome Pack button).", ephemeral=True)
         return
     qs = await asyncio.to_thread(db.list_quests_with_progress, steam, True)
     await interaction.response.send_message(embed=quest_summary_embed(qs), ephemeral=True)
@@ -713,11 +689,12 @@ async def quests(interaction: discord.Interaction):
 async def quest(interaction: discord.Interaction, quest_id: int):
     steam = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
     if steam is None:
-        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน", ephemeral=True)
+        await interaction.response.send_message("ยังไม่ได้เชื่อมบัญชี กดปุ่ม Welcome Pack ก่อน · Link your account first (Welcome Pack button).", ephemeral=True)
         return
     q = await asyncio.to_thread(db.get_quest_detail, quest_id, steam)
     if not q:
-        await interaction.response.send_message(f"ไม่พบเควสต์ #{quest_id}", ephemeral=True)
+        await interaction.response.send_message(
+            f"ไม่พบเควสต์ #{quest_id} · Quest #{quest_id} not found.", ephemeral=True)
         return
     await interaction.response.send_message(embed=quest_detail_embed(q), ephemeral=True)
 
@@ -1265,8 +1242,9 @@ async def setuplink(interaction: discord.Interaction):
     await interaction.channel.send(embed=discord.Embed(
         title="🎁 Welcome Pack",
         description=(
-            "กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>`\n\n"
-            f"🌐 เว็บ: {config.WEB_SHOP_URL}/login"
+            "กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>`\n"
+            "Tap the button for a code → type `/link <code>` in-game.\n\n"
+            f"🌐 เว็บ · Web: {config.WEB_SHOP_URL}/login"
         ),
         color=0x2ECC71), view=LinkView())
     await interaction.response.send_message("วางปุ่มแล้ว ✅", ephemeral=True)
@@ -1372,14 +1350,18 @@ async def setup(interaction: discord.Interaction):
         await welcome.send(embed=discord.Embed(
             title="🎁 Welcome Pack",
             description=(
-                "กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>` เชื่อมบัญชี + รับของ\n\n"
+                "กดปุ่มเพื่อรับ code → เข้าเกมพิมพ์ `/link <code>` เชื่อมบัญชี + รับของ\n"
+                "Tap the button for a code → type `/link <code>` in-game to link + claim.\n\n"
                 f"**🆕 เข้าใช้ผ่านเว็บได้แล้ว!** ซื้อ-ขาย/ดูยอด/เช็คโค้ดผ่านมือถือก็ได้\n"
-                f"👉 {config.WEB_SHOP_URL}/login (login ด้วย Discord เดียวกัน)"
+                f"**🆕 Web shop!** Buy, sell and check codes from your phone.\n"
+                f"👉 {config.WEB_SHOP_URL}/login (login ด้วย Discord เดียวกัน · same Discord login)"
             ),
             color=0x2ECC71),
             view=LinkView())
         await coins_ch.send(embed=discord.Embed(
-            title="💰 เช็ค Coin / My Coins", description="กดปุ่มเพื่อดูยอด Coin", color=0xF1C40F), view=BalanceView())
+            title="💰 เช็ค Coin / My Coins",
+            description="กดปุ่มเพื่อดูยอด Coin · Tap the button to check your balance",
+            color=0xF1C40F), view=BalanceView())
         await lb.send(embed=await build_top_embed(), view=LeaderboardView())
         for e in build_commands_embeds():
             await cmds_ch.send(embed=e)

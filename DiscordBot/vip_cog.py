@@ -30,7 +30,7 @@ COIN = getattr(config, "COIN_NAME", "Coin")
 def _fmt_expiry(expires_at_utc: datetime) -> str:
     local = expires_at_utc + timedelta(hours=TZ)
     days = max(0, (expires_at_utc - datetime.utcnow()).days)
-    return f"{local.strftime('%Y-%m-%d %H:%M')} (เหลือ ~{days} วัน)"
+    return f"{local.strftime('%Y-%m-%d %H:%M')} (เหลือ ~{days} วัน · ~{days} days left)"
 
 
 class BuyButton(discord.ui.Button):
@@ -50,7 +50,8 @@ class BuyButton(discord.ui.Button):
         steam_id = await asyncio.to_thread(db.get_steam_by_discord, user.id)
         if not steam_id:
             await interaction.followup.send(
-                "❌ ยังไม่ได้เชื่อมบัญชี — กดปุ่ม Welcome/Link แล้วพิมพ์ `/link <code>` ในเกมก่อน",
+                "❌ ยังไม่ได้เชื่อมบัญชี — กดปุ่ม Welcome/Link แล้วพิมพ์ `/link <code>` ในเกมก่อน\n"
+                "Link your account first — tap the Welcome button, then `/link <code>` in-game.",
                 ephemeral=True,
             )
             return
@@ -59,23 +60,27 @@ class BuyButton(discord.ui.Button):
             res = await asyncio.to_thread(vip_db.buy_vip, int(steam_id), self.pkg["id"], str(user))
         except Exception as e:  # noqa: BLE001
             print(f"[VIP] buy_vip failed: {e}")
-            await interaction.followup.send("❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง", ephemeral=True)
+            await interaction.followup.send(
+                "❌ เกิดข้อผิดพลาด ลองใหม่อีกครั้ง · Something went wrong, try again.", ephemeral=True)
             return
 
         if not res["ok"]:
             if res["reason"] == "coins":
                 await interaction.followup.send(
-                    f"❌ {COIN} ไม่พอ — ต้องใช้ {res['need']} แต่มี {res['balance']}", ephemeral=True
+                    f"❌ {COIN} ไม่พอ — ต้องใช้ {res['need']} แต่มี {res['balance']} · "
+                    f"Not enough (need {res['need']}, have {res['balance']}).", ephemeral=True
                 )
             else:
-                await interaction.followup.send("❌ แพ็กเกจนี้ปิดอยู่/ไม่พบ", ephemeral=True)
+                await interaction.followup.send(
+                    "❌ แพ็กเกจนี้ปิดอยู่/ไม่พบ · Package unavailable.", ephemeral=True)
             return
 
         await interaction.followup.send(
-            f"✅ ซื้อ **{res['tier']}** สำเร็จ! (+{res['days']} วัน)\n"
-            f"หมดอายุ: **{_fmt_expiry(res['expires_at'])}**\n"
-            f"คงเหลือ: {res['balance']} {COIN}\n"
-            f"_สิทธิ์จะถูกใส่ในเกมภายใน ~1 นาที (ถ้าออนไลน์อยู่ ลองรีล็อกถ้ายังไม่ขึ้น)_",
+            f"✅ ซื้อ **{res['tier']}** สำเร็จ! (+{res['days']} วัน) · Purchased (+{res['days']} days)\n"
+            f"หมดอายุ · Expires: **{_fmt_expiry(res['expires_at'])}**\n"
+            f"คงเหลือ · Balance: {res['balance']} {COIN}\n"
+            f"_สิทธิ์จะถูกใส่ในเกมภายใน ~1 นาที (ถ้าออนไลน์อยู่ ลองรีล็อกถ้ายังไม่ขึ้น)_\n"
+            f"_Perks apply in-game within ~1 min (relog if they don't show)._",
             ephemeral=True,
         )
 
@@ -104,19 +109,23 @@ class VipCog(commands.Cog):
     async def vipshop(self, interaction: discord.Interaction):
         packages = await asyncio.to_thread(vip_db.list_packages, True)
         if not packages:
-            await interaction.response.send_message("ยังไม่มีแพ็กเกจ VIP เปิดขายตอนนี้", ephemeral=True)
+            await interaction.response.send_message(
+                "ยังไม่มีแพ็กเกจ VIP เปิดขายตอนนี้ · No VIP packages available right now.",
+                ephemeral=True)
             return
 
         embed = discord.Embed(
             title="⭐ VIP Shop",
-            description="เลือกแพ็กเกจด้านล่าง — ซื้อด้วย Coin (ซื้อซ้ำ = ต่ออายุ)",
+            description="เลือกแพ็กเกจด้านล่าง — ซื้อด้วย Coin (ซื้อซ้ำ = ต่ออายุ)\n"
+                        "Pick a package below — buy with coins (buying again extends).",
             color=discord.Color.gold(),
         )
         for pkg in packages:
             label = pkg.get("label") or f"{pkg['tier']} {pkg['days']} วัน"
             embed.add_field(
                 name=label,
-                value=f"{int(pkg['price_coins'])} {COIN} · {pkg['days']} วัน · กลุ่ม `{pkg['group_id']}`",
+                value=f"{int(pkg['price_coins'])} {COIN} · {pkg['days']} วัน/days · "
+                      f"กลุ่ม/group `{pkg['group_id']}`",
                 inline=False,
             )
         await interaction.response.send_message(
@@ -128,13 +137,16 @@ class VipCog(commands.Cog):
         steam_id = await asyncio.to_thread(db.get_steam_by_discord, interaction.user.id)
         if not steam_id:
             await interaction.response.send_message(
-                "❌ ยังไม่ได้เชื่อมบัญชี — `/link <code>` ในเกมก่อน", ephemeral=True
+                "❌ ยังไม่ได้เชื่อมบัญชี — `/link <code>` ในเกมก่อน · Link your account first.",
+                ephemeral=True
             )
             return
         grants = await asyncio.to_thread(vip_db.get_active_grants, int(steam_id))
         if not grants:
-            await interaction.response.send_message("คุณยังไม่มี VIP — `/vipshop` เพื่อซื้อ", ephemeral=True)
+            await interaction.response.send_message(
+                "คุณยังไม่มี VIP — `/vipshop` เพื่อซื้อ · No VIP yet — buy with `/vipshop`.",
+                ephemeral=True)
             return
-        lines = [f"• **{g['group_id']}** — หมดอายุ {_fmt_expiry(g['expires_at'])}" for g in grants]
+        lines = [f"• **{g['group_id']}** — หมดอายุ · expires {_fmt_expiry(g['expires_at'])}" for g in grants]
         embed = discord.Embed(title="⭐ VIP ของคุณ", description="\n".join(lines), color=discord.Color.gold())
         await interaction.response.send_message(embed=embed, ephemeral=True)
