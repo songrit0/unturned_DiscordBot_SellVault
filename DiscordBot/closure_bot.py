@@ -10,7 +10,7 @@ On startup (idempotent, safe to restart):
   - posts the closure notice with a "Leave server" button (kicks the clicker)
   - locks LOCKED_ROLE_IDS so those roles can see ONLY the closure channel
   - after KICK_AFTER (end of July 30, 2026 UTC+7) an hourly sweep kicks every
-    remaining member automatically
+    remaining member holding one of LOCKED_ROLE_IDS automatically
 
 Requires: Kick Members + Manage Channels + Manage Roles permissions, and the
 privileged Server Members intent (Developer Portal > Bot > Server Members Intent)
@@ -133,6 +133,8 @@ async def _auto_kick_tick():
     for m in list(guild.members):
         if m.id == guild.me.id:
             continue
+        if not any(r.id in LOCKED_ROLE_IDS for r in m.roles):
+            continue  # only sweep members holding a locked role
         try:
             await m.kick(reason="Server permanently closed")
             log.info("auto-kicked %s (%s)", m, m.id)
